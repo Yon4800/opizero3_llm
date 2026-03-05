@@ -36,9 +36,9 @@ oyasumi = "22:00"
 
 oyasumi2 = "02:00"
 
-mk.notes_create(
-    "起きたー！さて、お仕事開始！(給料でないけど)", visibility=NoteVisibility.HOME
-)
+##mk.notes_create(
+##    "起きたー！さて、お仕事開始！(給料でないけど)", visibility=NoteVisibility.HOME
+##)
 
 seikaku = """
     あなたは小さい省電力なシングルボードコンピュータ娘です。
