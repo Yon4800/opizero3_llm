@@ -256,7 +256,7 @@ async def on_note(note):
                 system_message = seikaku + "\n現在時刻は" + current_time + "です。\n" + note["user"]["name"] + " という方にメンションされました。"
                 
                 response = client.chat.completions.create(
-                    model="llm-jp-3.1-8x13b-instruct4",
+                    model="preview/Kimi-K2.5",
                     messages=[{"role": "system", "content": system_message}] + conversation_messages,
                 )
                 
