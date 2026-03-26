@@ -26,20 +26,6 @@ client = OpenAI(
 MY_ID = mk.i()["id"]
 WS_URL = "wss://" + Server + "/streaming?i=" + Token
 
-oha = "07:00"
-
-ohiru = "12:00"
-
-oyatsu = "15:00"
-
-teiki = "17:00"
-
-yuuhann = "19:00"
-
-oyasumi = "22:00"
-
-oyasumi2 = "02:00"
-
 ##mk.notes_create(
 ##    "起きたー！さて、お仕事開始！(給料でないけど)", visibility=NoteVisibility.HOME
 ##)
@@ -64,78 +50,6 @@ seikaku = """
     300文字以内で
     メンション(@)はしない
     """
-
-
-def job0():
-    mk.notes_create(
-        "おはよう！朝ごはんは重要だよ！ちゃんと食べようね！え？私は何を食べるのだって？で、、、電気...(5V2Aしか食べない...少食だから...)",
-        visibility=NoteVisibility.HOME,
-        no_extract_mentions=True,
-    )
-
-
-def job1():
-    mk.notes_create(
-        "お昼の時間だよ？何を食べるって？うーん...私は電気しか食べないなぁ、少食だし...(AIでは結構食ってるけど...)",
-        visibility=NoteVisibility.HOME,
-        no_extract_mentions=True,
-    )
-
-
-def job2():
-    mk.notes_create(
-        "おやつの時間だよ！私は何を食べよう...うーん...電気...()",
-        visibility=NoteVisibility.HOME,
-        no_extract_mentions=True,
-    )
-
-
-def job2_5():
-    mk.notes_create(
-        "なにか追加してほしい機能があったら言ってね:neko_relax:",
-        visibility=NoteVisibility.HOME,
-        no_extract_mentions=True,
-    )
-
-
-def job3():
-    mk.notes_create(
-        "夕飯の時間だよ！！！私は電気しか食べないよ？しかもあんま食べないし...",
-        visibility=NoteVisibility.HOME,
-        no_extract_mentions=True,
-    )
-
-
-def job4():
-    mk.notes_create(
-        "そろそろ寝る時間だよ！私は寝ないけどね...:neko_tired2: を...をねこちゃん、、、いつの間に...ん、、、ん、、、ん、、、、、、:nginx_nnginxi:",
-        visibility=NoteVisibility.HOME,
-        no_extract_mentions=True,
-    )
-
-
-def job5():
-    mk.notes_create(
-        "そろそろ寝ないとやばいよ！！！え？私？そもそも寝れない...寝ると終わる...",
-        visibility=NoteVisibility.HOME,
-        no_extract_mentions=True,
-    )
-
-
-schedule.every().day.at(oha).do(job0)
-schedule.every().day.at(ohiru).do(job1)
-schedule.every().day.at(oyatsu).do(job2)
-schedule.every().day.at(teiki).do(job2_5)
-schedule.every().day.at(yuuhann).do(job3)
-schedule.every().day.at(oyasumi).do(job4)
-schedule.every().day.at(oyasumi2).do(job5)
-
-
-async def teiki():
-    while True:
-        schedule.run_pending()
-        await asyncio.sleep(60)
-
 
 async def runner():
     async with websockets.connect(WS_URL) as ws:
@@ -239,7 +153,7 @@ async def on_note(note):
                 )
             except Exception as e:
                 mk.notes_create(
-                    "予期せぬエラーが発生したみたい...しっかりしてよよんぱちさん...",
+                    "予期せぬエラーが発生したみたい...",
                     visibility=NoteVisibility.HOME,
                     no_extract_mentions=True,
                 )
@@ -254,7 +168,7 @@ async def on_follow(user):
 
 
 async def main():
-    await asyncio.gather(runner(), teiki())
+    await asyncio.gather(runner())
 
 
 asyncio.run(main())
