@@ -139,7 +139,7 @@ async def on_note(note):
                 system_message = seikaku + "\n現在時刻は" + current_time + "です。\n" + note["user"]["name"] + " という方にメンションされました。"
                 
                 response = client.chat.completions.create(
-                    model="Qwen3-Coder-480B-A35B-Instruct-FP8",
+                    model="preview/Qwen3-VL-30B-A3B-Instruct",
                     messages=[{"role": "system", "content": system_message}] + conversation_messages,
                 )
                 
