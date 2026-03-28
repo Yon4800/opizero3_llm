@@ -4,7 +4,7 @@ import websockets
 from misskey import Misskey, NoteVisibility
 from dotenv import load_dotenv
 import os
-from groq import Groq
+from openai import OpenAI
 import schedule
 from datetime import datetime
 
@@ -18,8 +18,9 @@ Apikey = os.getenv("APIKEY")
 mk = Misskey(Server)
 mk.token = Token
 
-client = Groq(
-    api_key=os.environ["APIKEY"]
+client = OpenAI(
+    base_url="https://api.ai.sakura.ad.jp/v1",
+    api_key=os.environ["APIKEY"],
 )
 
 MY_ID = mk.i()["id"]
@@ -138,7 +139,7 @@ async def on_note(note):
                 system_message = seikaku + "\n現在時刻は" + current_time + "です。\n" + note["user"]["name"] + " という方にメンションされました。"
                 
                 response = client.chat.completions.create(
-                    model="qwen/qwen3-32b",
+                    model="gpt-oss-120b",
                     messages=[{"role": "system", "content": system_message}] + conversation_messages,
                 )
                 
