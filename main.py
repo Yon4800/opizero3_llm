@@ -4,24 +4,22 @@ import websockets
 from misskey import Misskey, NoteVisibility
 from dotenv import load_dotenv
 import os
-from openai import OpenAI
+from google import genai
+from google.genai import types
 import schedule
 from datetime import datetime
-
 import random
 import re
 
 load_dotenv()
 Token = os.getenv("TOKEN")
 Server = os.getenv("SERVER")
-Apikey = os.getenv("APIKEY")
+Apikey = os.getenv("APIKEY")  # Gemini API Key
 mk = Misskey(Server)
 mk.token = Token
 
-client = OpenAI(
-    base_url="https://api.ai.sakura.ad.jp/v1",
-    api_key=os.environ["APIKEY"],
-)
+# Google Genai クライアント初期化
+client = genai.Client(api_key=Apikey)
 
 MY_ID = mk.i()["id"]
 WS_URL = "wss://" + Server + "/streaming?i=" + Token
@@ -138,13 +136,24 @@ async def on_note(note):
                 # システムプロンプトを最初に追加
                 system_message = seikaku + "\n現在時刻は" + current_time + "です。\n" + note["user"]["name"] + " という方にメンションされました。"
                 
-                response = client.chat.completions.create(
-                    model="preview/Qwen3-VL-30B-A3B-Instruct",
-                    messages=[{"role": "system", "content": system_message}] + conversation_messages,
+                history = []
+                for msg in conversation_messages[:-1]:  # 最後のユーザーメッセージ以外
+                    role = "model" if msg["role"] == "assistant" else "user"
+                    history.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
+                
+                # 最後のユーザーメッセージ
+                last_user_message = conversation_messages[-1]["content"]
+                
+                response = client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_message,
+                        max_output_tokens=500,
+                    ),
+                    contents=history + [types.Content(role="user", parts=[types.Part(text=last_user_message)])]
                 )
-                
-                safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.choices[0].message.content).strip()
-                
+                safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
+
                 mk.notes_create(
                     text=safe_text,
                     reply_id=note["id"],
