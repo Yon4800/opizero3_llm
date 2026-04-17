@@ -145,10 +145,9 @@ async def on_note(note):
                 last_user_message = conversation_messages[-1]["content"]
                 
                 response = client.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model="gemma-4-31b-it",
                     config=types.GenerateContentConfig(
-                        system_instruction=system_message,
-                        max_output_tokens=500,
+                        system_instruction=system_message
                     ),
                     contents=history + [types.Content(role="user", parts=[types.Part(text=last_user_message)])]
                 )
