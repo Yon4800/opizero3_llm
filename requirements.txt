@@ -1,6 +1,6 @@
 Misskey.py
 websockets
 python-dotenv
-openai
+google-genai
 schedule
 requests
