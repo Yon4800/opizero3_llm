@@ -332,7 +332,7 @@ async def on_follow(user):
 
 async def check_auto_wakeup_loop():
     """
-    バックグラウンドでボットの自動起床をチェックするループ
+    バックグラウンドでボットの自動起床および自動就寝をチェックするループ
     """
     while True:
         try:
@@ -374,8 +374,50 @@ async def check_auto_wakeup_loop():
                                 visibility=NoteVisibility.HOME,
                                 no_extract_mentions=True
                             )
+            else:
+                # 自動就寝判定 (21:00以降)
+                now = datetime.now()
+                if now.hour >= 21:
+                    today_str = now.date().isoformat()
+                    if state_manager.get_last_sleep_check_date() != today_str:
+                        state_manager.set_last_sleep_check_date(today_str)
+                        # 1週間に2〜3回程度 (35.7%の確率)
+                        if random.random() < 0.357:
+                            # 就寝処理
+                            sleep_duration = random.uniform(6.0, 8.0)
+                            state_manager.start_sleep(sleep_duration)
+                            print("ボットが自動的に就寝します。")
+                            
+                            current_time = now.strftime("%Y年%m月%d日 %H:%M")
+                            system_message = (
+                                seikaku 
+                                + f"\n現在時刻は {current_time} です。あなたは夜遅くなり、急に強い眠気に襲われました。タイムラインに向けて、眠気に耐えかねておやすみを言う挨拶をキャラクターとして300文字以内で投稿してください。語尾は「あはは！」です。"
+                            )
+                            
+                            try:
+                                response = client.models.generate_content(
+                                    model="gemini-3.1-flash-lite",
+                                    config=types.GenerateContentConfig(
+                                        system_instruction=system_message
+                                    ),
+                                    contents=["眠そうなおやすみのノートを作成してください。"]
+                                )
+                                safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
+                                
+                                mk.notes_create(
+                                    text=safe_text,
+                                    visibility=NoteVisibility.HOME,
+                                    no_extract_mentions=True
+                                )
+                            except Exception as e:
+                                print(f"自動就寝時のLLM生成または投稿エラー: {e}")
+                                mk.notes_create(
+                                    text="ふあぁ…なんだか急に眠くなってきちゃった…おやすみー！あはは！",
+                                    visibility=NoteVisibility.HOME,
+                                    no_extract_mentions=True
+                                )
         except Exception as e:
-            print(f"自動起床ループ内エラー: {e}")
+            print(f"ループ内処理エラー: {e}")
             
         await asyncio.sleep(60)
 

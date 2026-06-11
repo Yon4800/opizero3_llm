@@ -13,7 +13,8 @@ class StateManager:
             "sleep_state": {
                 "is_sleeping": False,
                 "sleep_start_time": None,
-                "target_sleep_duration": None
+                "target_sleep_duration": None,
+                "last_sleep_check_date": None
             },
             "user_data": {}
         }
@@ -23,7 +24,11 @@ class StateManager:
         if os.path.exists(self.data_path):
             try:
                 with open(self.data_path, "r", encoding="utf-8") as f:
-                    self.data = json.load(f)
+                    loaded = json.load(f)
+                    if "sleep_state" in loaded:
+                        self.data["sleep_state"].update(loaded["sleep_state"])
+                    if "user_data" in loaded:
+                        self.data["user_data"].update(loaded["user_data"])
             except Exception as e:
                 print(f"Error loading state: {e}")
                 # Keep default data
@@ -58,6 +63,13 @@ class StateManager:
         self.data["sleep_state"]["is_sleeping"] = False
         self.data["sleep_state"]["sleep_start_time"] = None
         self.data["sleep_state"]["target_sleep_duration"] = None
+        self.save()
+
+    def get_last_sleep_check_date(self) -> str:
+        return self.data["sleep_state"].get("last_sleep_check_date")
+
+    def set_last_sleep_check_date(self, check_date: str):
+        self.data["sleep_state"]["last_sleep_check_date"] = check_date
         self.save()
 
     # User affection management
