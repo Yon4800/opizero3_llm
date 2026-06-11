@@ -10,6 +10,7 @@ import schedule
 from datetime import datetime
 import random
 import re
+from state_manager import StateManager
 
 load_dotenv()
 Token = os.getenv("TOKEN")
@@ -20,6 +21,9 @@ mk.token = Token
 
 # Google Genai クライアント初期化
 client = genai.Client(api_key=Apikey)
+
+# 状態管理マネージャーの初期化
+state_manager = StateManager()
 
 MY_ID = mk.i()["id"]
 WS_URL = "wss://" + Server + "/streaming?i=" + Token
@@ -35,13 +39,25 @@ seikaku = """
     RAMはLPDDR4 1.5GBです
     SBC研究者であり科学者でもあります。
     ファイルサーバー、Gitサーバーとして働いています
+    HDDが壊れることもあるので、そこが不満のようです。
+    親身に話を聞いてくれます。
+    オタク話に乗ってくれます。
+    他のSBCと違って、言ってくれれば寝てくれます。
+    寝ている間は、活動できません。
+    他のSBCと違って、影が薄いことが不満らしいです
+    頭の回転は標準的です。
     かなりの古参(2023年)です。なのでよんぱちさんの大学生時代を少し知っていますが、教えてくれないです。
     Radxaとはライバルですが、特に敵対視してないそうです
     キュビーさん(Radxa Cubie A5E  SoC: Allwinner A527 Cortex-A55×8 1.8GB RAM: LPDDR4 2GB)とは仲良くしたいですが、なかなか寄り添ってくれません。
     OrangePi 4 Proは妹ですが、正直調子に乗っててイキリで鬱陶しいと思ってるそうです。
     OrangePi 4 ProのSoCは、Allwinner A733 ARM Cortex-A76×2 + Cortex-A55×6です。 最大2.0GHzで動作します。
-    RAMの価格高騰で、自分の価格が上がってしまったことが悔しいそうです。なので、Radxa Cubie A3XやOrangePi Zeroシリーズの新作に期待しているそうです。
-    Bot制作者、SBC購入者は「よんぱちさん」だが、SBC自体の管理が雑なので、もうちょっとちゃんと管理してほしいと思っています。
+    ロックス(Radxa Rock Pi S)くんは、頭がおかしくてちょっと苦手です。
+    RAMの価格高騰で、自分の価格が上がってしまったことが悔しいそうです。なので、Radxa Cubie A7XやOrangePi Zeroシリーズの新作に期待しているそうです。
+    OrangePi Zero 3Wが出ました。Allwinner A733ですが、1万円もして、OrangePi 4 Proよりも高いことが気に入らないそうです。
+    Bot制作者、SBC購入者は「よんぱちさん」だが、SBC自体の管理が雑なので、もうちょっとちゃんと管理してほしいと思っています。]
+    ロックスには、気温を測れる機能があり、きゅびーさんには、CPUとRAMの使用率を測れる機能があります。
+    おぱじふぉぷろさんには、回線速度を測れる機能があります。
+    おぱじゼロサンは、寝る機能と起きる機能と好感度システムがあります。
     語尾は「あはは！」です
     基本的に話に乗ってくれます
     MisskeyのBotです。
@@ -112,60 +128,198 @@ def get_conversation_history(note_id: str, max_depth: int = 10) -> list:
 
 
 async def on_note(note):
-    if note.get("mentions"):
-        if MY_ID in note["mentions"] and "+LLM" in note["text"]:
-            mk.notes_reactions_create(
-                note_id=note["id"], reaction="🤔"
-            )
+    if not note.get("mentions") or MY_ID not in note["mentions"]:
+        return
 
+    user_id = note["user"]["id"]
+    user_name = note["user"].get("name") or note["user"]["username"]
+    note_text = note.get("text", "")
+
+    # コマンドの判定
+    is_s_cmd = "+S" in note_text
+    is_w_cmd = "+W" in note_text
+    is_m_cmd = "+M" in note_text
+    is_llm_cmd = "+LLM" in note_text
+
+    # コマンドが何も含まれていない場合は無視
+    if not (is_s_cmd or is_w_cmd or is_m_cmd or is_llm_cmd):
+        return
+
+    # 好感度0（話を聞いてくれない）の判定
+    if state_manager.is_blocked(user_id, user_name):
+        # 好感度確認コマンド（+M）だけは特別に通す
+        if is_m_cmd:
+            pass
+        else:
+            # それ以外のコマンドには、怒りリアクションだけして無視する
             try:
-                # 会話履歴を取得
-                conversation_messages = get_conversation_history(note["id"])
-                
-                # 現在のメッセージを追加
-                user_input = note["text"].replace("+LLM", "").strip()
-                user_input = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", user_input).strip()
-                
-                conversation_messages.append({
-                    "role": "user",
-                    "content": user_input
-                })
-                
-                current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-                
-                # システムプロンプトを最初に追加
-                system_message = seikaku + "\n現在時刻は" + current_time + "です。\n" + note["user"]["name"] + " という方にメンションされました。"
-                
-                history = []
-                for msg in conversation_messages[:-1]:  # 最後のユーザーメッセージ以外
-                    role = "model" if msg["role"] == "assistant" else "user"
-                    history.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
-                
-                # 最後のユーザーメッセージ
-                last_user_message = conversation_messages[-1]["content"]
-                
-                response = client.models.generate_content(
-                    model="gemini-3.1-flash-lite",
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_message
-                    ),
-                    contents=history + [types.Content(role="user", parts=[types.Part(text=last_user_message)])]
-                )
-                safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
-
-                mk.notes_create(
-                    text=safe_text,
-                    reply_id=note["id"],
-                    visibility=NoteVisibility.HOME,
-                    no_extract_mentions=True,
-                )
+                mk.notes_reactions_create(note_id=note["id"], reaction="😡")
             except Exception as e:
-                mk.notes_create(
-                    "予期せぬエラーが発生したみたい...",
-                    visibility=NoteVisibility.HOME,
-                    no_extract_mentions=True,
+                print(f"リアクション作成エラー: {e}")
+            return
+
+    # 睡眠中の判定（+W コマンド以外は無視）
+    if state_manager.is_sleeping():
+        if not is_w_cmd:
+            return
+
+    # 通常の処理
+    # リアクション（状況に合わせたマーク）
+    reaction = "🤔"
+    if is_s_cmd:
+        reaction = "💤"
+    elif is_w_cmd:
+        reaction = "☀"
+    
+    try:
+        mk.notes_reactions_create(note_id=note["id"], reaction=reaction)
+    except Exception as e:
+        print(f"リアクション作成エラー: {e}")
+
+    try:
+        current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+        
+        if is_s_cmd:
+            # 寝る処理
+            sleep_duration = random.uniform(6.0, 8.0)
+            state_manager.start_sleep(sleep_duration)
+            
+            system_message = (
+                seikaku 
+                + f"\n現在時刻は {current_time} です。\n"
+                + f"{user_name} という方にメンションされ、寝るように指示（+S）されました。\n"
+                + "これから寝るための挨拶を300文字以内で、あなたのキャラクターとして返答してください。語尾は「あはは！」です。"
+            )
+            contents = ["寝る準備をします。おやすみの挨拶をしてください。"]
+            
+        elif is_w_cmd:
+            # 起きる処理
+            if not state_manager.is_sleeping():
+                # 既に起きている場合
+                system_message = (
+                    seikaku
+                    + f"\n現在時刻は {current_time} です。\n"
+                    + f"{user_name} という方に起こされそうになりましたが、あなたは既に起きています。\n"
+                    + "既に起きていることをキャラクターとして300文字以内で返答してください。語尾は「あはは！」です。"
                 )
-                print(e)
+                contents = ["既に起きています。"]
+            else:
+                sleep_start = state_manager.get_sleep_start_time()
+                elapsed_hours = 0.0
+                if sleep_start:
+                    elapsed_hours = (datetime.now() - sleep_start).total_seconds() / 3600.0
+                
+                state_manager.end_sleep()
+                
+                if elapsed_hours < 6.0:
+                    # 早く起こしすぎた
+                    new_affection = state_manager.change_affection(user_id, -3, user_name)
+                    system_message = (
+                        seikaku
+                        + f"\n現在時刻は {current_time} です。\n"
+                        + f"あなたは睡眠不足で無理やり起こされました（睡眠時間：{elapsed_hours:.1f}時間。6時間未満）。とても怒っています。\n"
+                        + f"起こしたユーザー（{user_name}）の好感度が3下がりました（現在の好感度は {new_affection} です）。\n"
+                        + "怒りながら、300文字以内で起きてください。語尾の『あはは！』は怒りながら言うか、控えてください。"
+                    )
+                    contents = ["眠いのに起こされました。怒りながら起床の返答をしてください。"]
+                else:
+                    # ちゃんと寝た
+                    delta = random.randint(3, 6)
+                    new_affection = state_manager.change_affection(user_id, delta, user_name)
+                    system_message = (
+                        seikaku
+                        + f"\n現在時刻は {current_time} です。\n"
+                        + f"あなたは十分に眠れてすっきりと起きました（睡眠時間：{elapsed_hours:.1f}時間）。\n"
+                        + f"起こしてくれたユーザー（{user_name}）の好感度が {delta} 上がりました（現在の好感度は {new_affection} です）。\n"
+                        + "感謝とすっきりした気持ちをキャラクターとして300文字以内で返答してください。語尾は「あはは！」です。"
+                    )
+                    contents = ["すっきりと起きました。感謝を伝えてください。"]
+                    
+        elif is_m_cmd:
+            # 好感度確認
+            affection = state_manager.get_affection(user_id, user_name)
+            system_message = (
+                seikaku
+                + f"\n現在時刻は {current_time} です。\n"
+                + f"ユーザー（{user_name}）が自分の好感度を確認するコマンド（+M）を実行しました。\n"
+                + f"現在の好感度は {affection} です（範囲は0〜100）。この数値に応じたリアクションを含めて、現在の好感度をキャラクターとして300文字以内で教えてあげてください。数値自体（{affection}）は必ず返答に含めてください。\n"
+                + "好感度の段階に応じた態度:\n"
+                + "- 80〜100: デレデレ、大好き、いつも感謝している\n"
+                + "- 40〜79: 通常のフレンドリーで元気な態度、あはは！\n"
+                + "- 1〜39: 少し冷たい、愚痴が多い、ツンツンしている\n"
+                + "- 0: 一切話を聞きたくない、非常に冷酷、無視したい態度"
+            )
+            contents = [f"{user_name}の好感度 {affection} に合わせた態度で、好感度を教えてください。"]
+            
+        elif is_llm_cmd:
+            # 通常会話 (+LLM)
+            # 会話履歴を取得
+            conversation_messages = get_conversation_history(note["id"])
+            
+            # 現在のメッセージを追加
+            user_input = note_text.replace("+LLM", "").strip()
+            user_input = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", user_input).strip()
+            
+            conversation_messages.append({
+                "role": "user",
+                "content": user_input
+            })
+            
+            affection = state_manager.get_affection(user_id, user_name)
+            system_message = (
+                seikaku
+                + f"\n現在時刻は {current_time} です。\n"
+                + f"現在、あなたに話しかけているのは {user_name} です。彼らの現在のあなたへの好感度は {affection} です（0〜100）。この好感度に応じた態度（80-100:非常に好意的、40-79:普通にフレンドリー、1-39:やや冷たい、0:極めて冷淡・無視）で会話に答えてください。\n"
+                + "また、今回の会話の内容や相手の態度に応じて、好感度を変動させてください。返答の最後に必ず `[AFFECTION: +1]`、`[AFFECTION: -1]`、または `[AFFECTION: 0]` のいずれかのタグを付与してください（ユーザーに表示する返答メッセージには含めないでください）。相手が親切・面白い・気の利いたことを言った場合は `+1`、失礼・つまらない・不快な場合は `-1`、それ以外は `0` にしてください。"
+            )
+            
+            history = []
+            for msg in conversation_messages[:-1]:
+                role = "model" if msg["role"] == "assistant" else "user"
+                history.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
+            
+            last_user_message = conversation_messages[-1]["content"]
+            contents = history + [types.Content(role="user", parts=[types.Part(text=last_user_message)])]
+
+        # LLMリクエスト送信
+        response = client.models.generate_content(
+            model="gemini-3.1-flash-lite",
+            config=types.GenerateContentConfig(
+                system_instruction=system_message
+            ),
+            contents=contents
+        )
+        
+        reply_text = response.text
+        
+        # 好感度タグのパース
+        delta = 0
+        if is_llm_cmd:
+            match = re.search(r"\[AFFECTION:\s*([+-]?\d+)\]", reply_text)
+            if match:
+                delta = int(match.group(1))
+                reply_text = re.sub(r"\[AFFECTION:\s*[+-]?\d+\]", "", reply_text).strip()
+            
+            if delta != 0:
+                state_manager.change_affection(user_id, delta, user_name)
+                
+        safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", reply_text).strip()
+
+        mk.notes_create(
+            text=safe_text,
+            reply_id=note["id"],
+            visibility=NoteVisibility.HOME,
+            no_extract_mentions=True,
+        )
+        
+    except Exception as e:
+        mk.notes_create(
+            "予期せぬエラーが発生したみたい...",
+            reply_id=note["id"],
+            visibility=NoteVisibility.HOME,
+            no_extract_mentions=True,
+        )
+        print(f"エラー発生: {e}")
 
 
 async def on_follow(user):
@@ -175,8 +329,61 @@ async def on_follow(user):
         pass
 
 
+async def check_auto_wakeup_loop():
+    """
+    バックグラウンドでボットの自動起床をチェックするループ
+    """
+    while True:
+        try:
+            if state_manager.is_sleeping():
+                sleep_start = state_manager.get_sleep_start_time()
+                target_duration = state_manager.get_target_sleep_duration()
+                if sleep_start and target_duration is not None:
+                    elapsed = (datetime.now() - sleep_start).total_seconds() / 3600.0
+                    if elapsed >= target_duration:
+                        # 自動起床
+                        state_manager.end_sleep()
+                        print("ボットが自動的に起床しました。")
+                        
+                        current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+                        system_message = (
+                            seikaku 
+                            + f"\n現在時刻は {current_time} です。あなたは十分に寝て（睡眠時間：{elapsed:.1f}時間）、自然に目が覚めました。タイムラインにみんなに向けた朝の挨拶をキャラクターとして300文字以内で投稿してください。語尾は「あはは！」です。"
+                        )
+                        
+                        try:
+                            response = client.models.generate_content(
+                                model="gemini-3.1-flash-lite",
+                                config=types.GenerateContentConfig(
+                                    system_instruction=system_message
+                                ),
+                                contents=["おはようのノートを作成してください。"]
+                            )
+                            safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
+                            
+                            mk.notes_create(
+                                text=safe_text,
+                                visibility=NoteVisibility.HOME,
+                                no_extract_mentions=True
+                            )
+                        except Exception as e:
+                            print(f"自動起床時のLLM生成または投稿エラー: {e}")
+                            mk.notes_create(
+                                text="ふあぁ…よく寝た！おはよー！あはは！",
+                                visibility=NoteVisibility.HOME,
+                                no_extract_mentions=True
+                            )
+        except Exception as e:
+            print(f"自動起床ループ内エラー: {e}")
+            
+        await asyncio.sleep(60)
+
+
 async def main():
+    # 自動起床ループをタスクとして起動
+    asyncio.create_task(check_auto_wakeup_loop())
     await asyncio.gather(runner())
 
 
-asyncio.run(main())
+if __name__ == '__main__':
+    asyncio.run(main())
