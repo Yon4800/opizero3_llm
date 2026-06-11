@@ -180,17 +180,31 @@ async def on_note(note):
         current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
         
         if is_s_cmd:
-            # 寝る処理
-            sleep_duration = random.uniform(6.0, 8.0)
-            state_manager.start_sleep(sleep_duration)
-            
-            system_message = (
-                seikaku 
-                + f"\n現在時刻は {current_time} です。\n"
-                + f"{user_name} という方にメンションされ、寝るように指示（+S）されました。\n"
-                + "これから寝るための挨拶を300文字以内で、あなたのキャラクターとして返答してください。語尾は「あはは！」です。"
-            )
-            contents = ["寝る準備をします。おやすみの挨拶をしてください。"]
+            # 寝る時間の判定（夜21:00〜朝06:00以外は「変な時間」として拒否する）
+            now = datetime.now()
+            if not (21 <= now.hour or now.hour < 6):
+                # 変な時間に寝かせようとしたため拒否して怒る
+                new_affection = state_manager.change_affection(user_id, -3, user_name)
+                system_message = (
+                    seikaku
+                    + f"\n現在時刻は {current_time} です。\n"
+                    + f"ユーザー（{user_name}）が変な時間（現在時刻：{current_time}）にあなたを寝かせようとしました（+S）。\n"
+                    + f"あなたは「こんな昼間から寝られるわけない！」と怒り、寝るのを拒否します。好感度が3下がりました（現在の好感度は {new_affection} です）。\n"
+                    + "怒って寝るのを拒否する返答をキャラクターとして300文字以内で作成してください。注意：好感度の具体的な数値（例：3、48など）は返答メッセージに含めないでください。語尾の『あはは！』は怒りながら言うか、控えてください。"
+                )
+                contents = ["変な時間に寝るように言われたので、怒って拒否してください。"]
+            else:
+                # 正常な寝る処理
+                sleep_duration = random.uniform(6.0, 8.0)
+                state_manager.start_sleep(sleep_duration)
+                
+                system_message = (
+                    seikaku 
+                    + f"\n現在時刻は {current_time} です。\n"
+                    + f"{user_name} という方にメンションされ、寝るように指示（+S）されました。\n"
+                    + "これから寝るための挨拶を300文字以内で、あなたのキャラクターとして返答してください。語尾は「あはは！」です。"
+                )
+                contents = ["寝る準備をします。おやすみの挨拶をしてください。"]
             
         elif is_w_cmd:
             # 起きる処理
