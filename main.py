@@ -179,6 +179,26 @@ async def on_note(note):
         print(f"リアクション作成エラー: {e}")
 
     try:
+        try:
+            from shared_economy_helper import load_economy, save_economy, get_user_state
+            econ_data = load_economy()
+            user_name_real = note["user"].get("name") or note["user"].get("username") or "ゲスト"
+            username_real = note["user"].get("username", "")
+            user_state = get_user_state(econ_data, note["userId"], username_real, user_name_real)
+            user_state["balance_ogc"] = round(user_state["balance_ogc"] + 100.0, 2)
+            save_economy(econ_data)
+        except Exception as ex:
+            print(f"Error updating economy in OrangePi Zero 3: {ex}")
+
+        def reply_note(text):
+            final_text = f"{text}\n(おぱじぜろさんとお話ししたため、100 OGCを獲得しました！)"
+            mk.notes_create(
+                text=final_text,
+                reply_id=note["id"],
+                visibility=NoteVisibility.HOME,
+                no_extract_mentions=True,
+            )
+
         current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
         
         if is_s_cmd:
@@ -323,20 +343,10 @@ async def on_note(note):
                 
         safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", reply_text).strip()
 
-        mk.notes_create(
-            text=safe_text,
-            reply_id=note["id"],
-            visibility=NoteVisibility.HOME,
-            no_extract_mentions=True,
-        )
+        reply_note(safe_text)
         
     except Exception as e:
-        mk.notes_create(
-            "予期せぬエラーが発生したみたい...",
-            reply_id=note["id"],
-            visibility=NoteVisibility.HOME,
-            no_extract_mentions=True,
-        )
+        reply_note("予期せぬエラーが発生したみたい...")
         print(f"エラー発生: {e}")
 
 
