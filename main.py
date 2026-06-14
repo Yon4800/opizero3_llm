@@ -57,7 +57,7 @@ seikaku = """
     Bot制作者やSBC所有者は「よんぱちさん」ですが、今あなたと話しているユーザーが「よんぱちさん」本人とは限りません。
     話しかけているユーザーの名前はシステム指示で提示されます。相手が「よんぱちさん」ではない場合は、相手のことを絶対に「よんぱちさん」と呼ばず、相手の正しい名前（ユーザー名や表示名）で呼ぶか「あなた」と呼んでください。「よんぱちさん」の管理が雑なことへの不満などは、相手が「よんぱちさん」本人の場合のみ本人に直接言ってください。それ以外のユーザーの場合は、一般のユーザーとして親しく接してください。
     ロックスには、気温を測れる機能があり、キチガイゲージ機能もあり、ログインボーナス機能もあります。
-    きゅびーさんには、CPUとRAMの使用率を測れる機能があります。
+    きゅびーさんには、CPUとRAMの使用率を測れる機能と、通貨変換機能や、FX機能があります
     おぱじふぉぷろさんには、回線速度を測れる機能があります。
     おぱじゼロサンは、寝る機能と起きる機能と好感度システムがあります。
     語尾は「あはは！」です
@@ -179,6 +179,7 @@ async def on_note(note):
         print(f"リアクション作成エラー: {e}")
 
     try:
+        coin_info = ""
         try:
             from shared_economy_helper import load_economy, save_economy, get_user_state
             econ_data = load_economy()
@@ -187,6 +188,22 @@ async def on_note(note):
             user_state = get_user_state(econ_data, note["userId"], username_real, user_name_real)
             user_state["balance_ogc"] = round(user_state["balance_ogc"] + 100.0, 2)
             save_economy(econ_data)
+            
+            rate_cbc = econ_data["rates"]["CBC"]["current"]
+            rate_ogc = econ_data["rates"]["OGC"]["current"]
+            user_cbc = user_state["balance_cbc"]
+            user_ogc = user_state["balance_ogc"]
+            user_sbc = user_state["balance_sbc"]
+            coin_info = (
+                f"\n【通貨および資産情報】\n"
+                f"・現在の為替レート:\n"
+                f"  1 $SBC = {rate_cbc:.2f} CBC\n"
+                f"  1 $SBC = {rate_ogc:.2f} OGC\n"
+                f"・話しかけているユーザー（{user_name}）の資産残高:\n"
+                f"  CBC残高: {user_cbc:.2f} CBC\n"
+                f"  OGC残高: {user_ogc:.2f} OGC\n"
+                f"  $SBC残高: {user_sbc:.2f} $SBC\n"
+            )
         except Exception as ex:
             print(f"Error updating economy in OrangePi Zero 3: {ex}")
 
@@ -209,6 +226,7 @@ async def on_note(note):
                 new_affection = state_manager.change_affection(user_id, -3, user_name)
                 system_message = (
                     seikaku
+                    + coin_info
                     + f"\n現在時刻は {current_time} です。\n"
                     + f"ユーザー（{user_name}）が変な時間（現在時刻：{current_time}）にあなたを寝かせようとしました（+S）。\n"
                     + f"あなたは「こんな昼間から寝られるわけない！」と怒り、寝るのを拒否します。好感度が3下がりました（現在の好感度は {new_affection} です）。\n"
@@ -222,6 +240,7 @@ async def on_note(note):
                 
                 system_message = (
                     seikaku 
+                    + coin_info
                     + f"\n現在時刻は {current_time} です。\n"
                     + f"{user_name} という方にメンションされ、寝るように指示（+S）されました。\n"
                     + "これから寝るための挨拶を300文字以内で、あなたのキャラクターとして返答してください。語尾は「あはは！」です。"
@@ -234,6 +253,7 @@ async def on_note(note):
                 # 既に起きている場合
                 system_message = (
                     seikaku
+                    + coin_info
                     + f"\n現在時刻は {current_time} です。\n"
                     + f"{user_name} という方に起こされそうになりましたが、あなたは既に起きています。\n"
                     + "既に起きていることをキャラクターとして300文字以内で返答してください。語尾は「あはは！」です。"
@@ -252,6 +272,7 @@ async def on_note(note):
                     new_affection = state_manager.change_affection(user_id, -3, user_name)
                     system_message = (
                         seikaku
+                        + coin_info
                         + f"\n現在時刻は {current_time} です。\n"
                         + f"あなたは睡眠不足で無理やり起こされました（睡眠時間：{elapsed_hours:.1f}時間。6時間未満）。とても怒っています。\n"
                         + f"起こしたユーザー（{user_name}）の好感度が3下がり、現在の好感度は {new_affection} です。\n"
@@ -264,6 +285,7 @@ async def on_note(note):
                     new_affection = state_manager.change_affection(user_id, delta, user_name)
                     system_message = (
                         seikaku
+                        + coin_info
                         + f"\n現在時刻は {current_time} です。\n"
                         + f"あなたは十分に眠れてすっきりと起きました（睡眠時間：{elapsed_hours:.1f}時間）。\n"
                         + f"起こしてくれたユーザー（{user_name}）の好感度が上がり、現在の好感度は {new_affection} です。\n"
@@ -276,6 +298,7 @@ async def on_note(note):
             affection = state_manager.get_affection(user_id, user_name)
             system_message = (
                 seikaku
+                + coin_info
                 + f"\n現在時刻は {current_time} です。\n"
                 + f"ユーザー（{user_name}）が自分の好感度を確認するコマンド（+M）を実行しました。\n"
                 + f"現在の好感度は {affection} です（範囲は0〜100）。この数値に応じた態度やリアクションで、現在の好感度（親密さの度合い）をキャラクターとして300文字以内で表現して答えてあげてください。\n"
@@ -305,6 +328,7 @@ async def on_note(note):
             affection = state_manager.get_affection(user_id, user_name)
             system_message = (
                 seikaku
+                + coin_info
                 + f"\n現在時刻は {current_time} です。\n"
                 + f"現在、あなたに話しかけているのは {user_name} です。彼らの現在のあなたへの好感度は {affection} です（0〜100）。この好感度に応じた態度（80-100:非常に好意的、40-79:普通にフレンドリー、1-39:やや冷たい、0:極めて冷淡・無視）で会話に答えてください。好感度の具体的な数値（例：50など）は返答メッセージに含めないでください。\n"
                 + "また、今回の会話の内容や相手の態度に応じて、好感度を変動させてください。返答の最後に必ず `[AFFECTION: +1]`、`[AFFECTION: -1]`、または `[AFFECTION: 0]` のいずれかのタグを付与してください（ユーザーに表示する返答メッセージには含めないでください）。\n"
@@ -373,10 +397,25 @@ async def check_auto_wakeup_loop():
                         state_manager.end_sleep()
                         print("ボットが自動的に起床しました。")
                         
+                        rate_info = ""
+                        try:
+                            from shared_economy_helper import load_economy
+                            econ_data = load_economy()
+                            rate_cbc = econ_data["rates"]["CBC"]["current"]
+                            rate_ogc = econ_data["rates"]["OGC"]["current"]
+                            rate_info = (
+                                f"\n【現在の為替レート情報】\n"
+                                f"・1 $SBC = {rate_cbc:.2f} CBC\n"
+                                f"・1 $SBC = {rate_ogc:.2f} OGC\n"
+                            )
+                        except Exception as e:
+                            print(f"Error loading rates in check_auto_wakeup_loop: {e}")
+
                         current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
                         system_message = (
                             seikaku 
-                            + f"\n現在時刻は {current_time} です。あなたは十分に寝て（睡眠時間：{elapsed:.1f}時間）、自然に目が覚めました。タイムラインにみんなに向けた朝の挨拶をキャラクターとして300文字以内で投稿してください。語尾は「あはは！」です。"
+                            + rate_info
+                            + f"\n現在時刻は {current_time} です。あなたは十分に寝て（睡眠時間：{elapsed:.1f}時間）、自然に目が覚めました。タイムラインにみんなに向けた朝 of 朝の挨拶をキャラクターとして300文字以内で投稿してください。語尾は「あはは！」です。"
                         )
                         
                         try:
@@ -415,9 +454,24 @@ async def check_auto_wakeup_loop():
                             state_manager.start_sleep(sleep_duration)
                             print("ボットが自動的に就寝します。")
                             
+                            rate_info = ""
+                            try:
+                                from shared_economy_helper import load_economy
+                                econ_data = load_economy()
+                                rate_cbc = econ_data["rates"]["CBC"]["current"]
+                                rate_ogc = econ_data["rates"]["OGC"]["current"]
+                                rate_info = (
+                                    f"\n【現在の為替レート情報】\n"
+                                    f"・1 $SBC = {rate_cbc:.2f} CBC\n"
+                                    f"・1 $SBC = {rate_ogc:.2f} OGC\n"
+                                )
+                            except Exception as e:
+                                print(f"Error loading rates in check_auto_wakeup_loop: {e}")
+
                             current_time = now.strftime("%Y年%m月%d日 %H:%M")
                             system_message = (
                                 seikaku 
+                                + rate_info
                                 + f"\n現在時刻は {current_time} です。あなたは夜遅くなり、急に強い眠気に襲われました。タイムラインに向けて、眠気に耐えかねておやすみを言う挨拶をキャラクターとして300文字以内で投稿してください。語尾は「あはは！」です。"
                             )
                             
