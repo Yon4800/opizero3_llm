@@ -191,7 +191,7 @@ async def on_note(note):
             print(f"Error updating economy in OrangePi Zero 3: {ex}")
 
         def reply_note(text):
-            final_text = f"{text}\n(おぱじぜろさんとお話ししたため、100 OGCを獲得しました！)"
+            final_text = text
             mk.notes_create(
                 text=final_text,
                 reply_id=note["id"],
