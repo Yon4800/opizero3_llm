@@ -11,6 +11,7 @@ from datetime import datetime
 import random
 import re
 from state_manager import StateManager
+from dht_reader import read_dht
 
 load_dotenv()
 Token = os.getenv("TOKEN")
@@ -56,7 +57,7 @@ seikaku = """
     OrangePi Zero 3Wが出ました。Allwinner A733ですが、1万円もして、OrangePi 4 Proよりも高いことが気に入らないそうです。
     Bot制作者やSBC所有者は「よんぱちさん」ですが、今あなたと話しているユーザーが「よんぱちさん」本人とは限りません。
     話しかけているユーザーの名前はシステム指示で提示されます。相手が「よんぱちさん」ではない場合は、相手のことを絶対に「よんぱちさん」と呼ばず、相手の正しい名前（ユーザー名や表示名）で呼ぶか「あなた」と呼んでください。「よんぱちさん」の管理が雑なことへの不満などは、相手が「よんぱちさん」本人の場合のみ本人に直接言ってください。それ以外のユーザーの場合は、一般のユーザーとして親しく接してください。
-    ロックスには、気温を測れる機能があり、キチガイゲージ機能もあり、ログインボーナス機能もあります。
+    ロックスには、気温、湿度、気圧を測れる機能があり、キチガイゲージ機能もあり、ログインボーナス機能もあります。
     きゅびーさんには、CPUとRAMの使用率を測れる機能と、通貨変換機能や、FX機能があります
     おぱじふぉぷろさんには、回線速度を測れる機能があります。
     おぱじゼロサンは、寝る機能と起きる機能と好感度システムがあります。
@@ -142,9 +143,10 @@ async def on_note(note):
     is_w_cmd = "+W" in note_text
     is_m_cmd = "+M" in note_text
     is_llm_cmd = "+LLM" in note_text
+    is_temp_cmd = "+TEMP" in note_text.upper()
 
     # コマンドが何も含まれていない場合は無視
-    if not (is_s_cmd or is_w_cmd or is_m_cmd or is_llm_cmd):
+    if not (is_s_cmd or is_w_cmd or is_m_cmd or is_llm_cmd or is_temp_cmd):
         return
 
     # 好感度0（話を聞いてくれない）の判定
@@ -172,11 +174,27 @@ async def on_note(note):
         reaction = "💤"
     elif is_w_cmd:
         reaction = "☀"
+    elif is_temp_cmd:
+        reaction = "🌡️"
     
     try:
         mk.notes_reactions_create(note_id=note["id"], reaction=reaction)
     except Exception as e:
         print(f"リアクション作成エラー: {e}")
+
+    # DHT11センサー情報の取得（おまけ・隠し機能）
+    temp_info = ""
+    is_temp_req = is_temp_cmd or any(w in note_text for w in ["温度", "湿度", "気温", "室温", "温湿度"])
+    if is_temp_req:
+        try:
+            loop = asyncio.get_running_loop()
+            temp, hum = await loop.run_in_executor(None, read_dht)
+            if temp is not None:
+                temp_info = f"\n[センサー情報]\n現在の室温は {temp:.1f}℃ です。湿度(参考)は {hum:.1f}% です。\n※注意: 元気いっぱいのSBC娘としてのキャラクター設定に関わらず、現在の室温の値（{temp:.1f}℃）と湿度の値（{hum:.1f}%）だけは正確にそのまま伝えてください。"
+            else:
+                temp_info = "\n[センサー情報]\nセンサーからの室温・湿度情報の取得に失敗しました。\n※注意: 元気いっぱいのSBC娘としてのキャラクター設定に関わらず、現在は『室温・湿度情報の測定に失敗した（測れなかった）』ということだけは絶対に正確にそのまま伝えてください（架空の室温の数値をでっち上げたりしないでください）。"
+        except Exception as e:
+            print(f"DHT11読み取りエラー: {e}")
 
     try:
         coin_info = ""
@@ -311,13 +329,13 @@ async def on_note(note):
             )
             contents = [f"{user_name}の好感度 {affection} に合わせた態度で、好感度について答えてください。"]
             
-        elif is_llm_cmd:
-            # 通常会話 (+LLM)
+        elif is_llm_cmd or is_temp_cmd:
+            # 通常会話 (+LLM / +TEMP)
             # 会話履歴を取得
             conversation_messages = get_conversation_history(note["id"])
             
             # 現在のメッセージを追加
-            user_input = note_text.replace("+LLM", "").strip()
+            user_input = note_text.replace("+LLM", "").replace("+TEMP", "").replace("+temp", "").strip()
             user_input = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", user_input).strip()
             
             conversation_messages.append({
@@ -343,6 +361,9 @@ async def on_note(note):
             last_user_message = conversation_messages[-1]["content"]
             contents = history + [types.Content(role="user", parts=[types.Part(text=last_user_message)])]
 
+        if temp_info:
+            system_message += temp_info
+
         # LLMリクエスト送信
         response = client.models.generate_content(
             model="gemini-3.1-flash-lite",
@@ -356,7 +377,7 @@ async def on_note(note):
         
         # 好感度タグのパース
         delta = 0
-        if is_llm_cmd:
+        if is_llm_cmd or is_temp_cmd:
             match = re.search(r"\[AFFECTION:\s*([+-]?\d+)\]", reply_text)
             if match:
                 delta = int(match.group(1))
