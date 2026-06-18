@@ -199,7 +199,7 @@ async def on_note(note):
     try:
         coin_info = ""
         try:
-            from shared_economy_helper import load_economy, save_economy, get_user_state
+            from shared_economy_helper import load_economy, save_economy, get_user_state, get_recent_rates_history_desc
             econ_data = load_economy()
             user_name_real = note["user"].get("name") or note["user"].get("username") or "ゲスト"
             username_real = note["user"].get("username", "")
@@ -212,11 +212,13 @@ async def on_note(note):
             user_cbc = user_state["balance_cbc"]
             user_ogc = user_state["balance_ogc"]
             user_sbc = user_state["balance_sbc"]
+            history_desc = get_recent_rates_history_desc(limit=5)
             coin_info = (
                 f"\n【通貨および資産情報】\n"
                 f"・現在の為替レート:\n"
                 f"  1 $SBC = {rate_cbc:.2f} CBC\n"
                 f"  1 $SBC = {rate_ogc:.2f} OGC\n"
+                f"\n{history_desc}\n"
                 f"・話しかけているユーザー（{user_name}）の資産残高:\n"
                 f"  CBC残高: {user_cbc:.2f} CBC\n"
                 f"  OGC残高: {user_ogc:.2f} OGC\n"
@@ -352,6 +354,17 @@ async def on_note(note):
                 + "また、今回の会話の内容や相手の態度に応じて、好感度を変動させてください。返答の最後に必ず `[AFFECTION: +1]`、`[AFFECTION: -1]`、または `[AFFECTION: 0]` のいずれかのタグを付与してください（ユーザーに表示する返答メッセージには含めないでください）。\n"
                 + "【重要】普通の会話や質問、挨拶など、日常的なやり取りでは好感度を上げ下げせず「0」にしてください。相手が非常に親切にしてくれたり、あなたを大いに喜ばせたり、素晴らしい贈り物の言葉をくれた場合のみ「+1」にし、逆に極めて失礼、侮辱的、または不快な発言をした場合のみ「-1」にしてください。普段は基本的に「0」を維持すること。"
             )
+            rate_rules = (
+                "\n【会話による為替操作ルール】\n"
+                "・あなたは会話相手とのやり取りや好感度の変動に応じて、あなたの国の通貨（OGC）の為替レートを動かすことができます。\n"
+                "・好感度が上がった場合（喜んだ場合）は、レートを下げて（通貨高／OGC高にして）ください。\n"
+                "  タグの形式: `[RATE_CHANGE: -X.X]`（例: `[RATE_CHANGE: -1.5]`）を指定してください。変動幅は -0.5 から -5.0 の間で選んでください。\n"
+                "・好感度が下がった場合（怒ったり悲しんだりした場合）は、レートを上げて（通貨安／OGC安にして）ください。\n"
+                "  タグの形式: `[RATE_CHANGE: +X.X]`（例: `[RATE_CHANGE: +1.5]`）を指定してください。変動幅は +0.5 から +5.0 の間で選んでください。\n"
+                "・特に変化がない場合は、タグを出力しないでください。\n"
+                "・タグは好感度タグ `[AFFECTION: +1]` などと一緒に、メッセージの最後に付与してください。"
+            )
+            system_message += rate_rules
             
             history = []
             for msg in conversation_messages[:-1]:
@@ -375,16 +388,27 @@ async def on_note(note):
         
         reply_text = response.text
         
-        # 好感度タグのパース
+        # 好感度タグと為替操作タグのパース
         delta = 0
         if is_llm_cmd or is_temp_cmd:
-            match = re.search(r"\[AFFECTION:\s*([+-]?\d+)\]", reply_text)
-            if match:
-                delta = int(match.group(1))
+            match_aff = re.search(r"\[AFFECTION:\s*([+-]?\d+)\]", reply_text)
+            if match_aff:
+                delta = int(match_aff.group(1))
                 reply_text = re.sub(r"\[AFFECTION:\s*[+-]?\d+\]", "", reply_text).strip()
             
             if delta != 0:
                 state_manager.change_affection(user_id, delta, user_name)
+                
+            match_rate = re.search(r"\[RATE_CHANGE:\s*([+-]?\d+(?:\.\d+)?)\]", reply_text)
+            if match_rate:
+                try:
+                    from shared_economy_helper import apply_rate_change, save_economy
+                    rate_delta = float(match_rate.group(1))
+                    apply_rate_change(econ_data, "OGC", rate_delta)
+                    save_economy(econ_data)
+                    reply_text = re.sub(r"\[RATE_CHANGE:\s*[+-]?\d+(?:\.\d+)?\]", "", reply_text).strip()
+                except Exception as e:
+                    print(f"Error applying rate change in opizero3 general talk: {e}")
                 
         safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", reply_text).strip()
 
@@ -420,14 +444,16 @@ async def check_auto_wakeup_loop():
                         
                         rate_info = ""
                         try:
-                            from shared_economy_helper import load_economy
+                            from shared_economy_helper import load_economy, get_recent_rates_history_desc
                             econ_data = load_economy()
                             rate_cbc = econ_data["rates"]["CBC"]["current"]
                             rate_ogc = econ_data["rates"]["OGC"]["current"]
+                            history_desc = get_recent_rates_history_desc(limit=5)
                             rate_info = (
                                 f"\n【現在の為替レート情報】\n"
                                 f"・1 $SBC = {rate_cbc:.2f} CBC\n"
                                 f"・1 $SBC = {rate_ogc:.2f} OGC\n"
+                                f"\n{history_desc}\n"
                             )
                         except Exception as e:
                             print(f"Error loading rates in check_auto_wakeup_loop: {e}")
@@ -477,14 +503,16 @@ async def check_auto_wakeup_loop():
                             
                             rate_info = ""
                             try:
-                                from shared_economy_helper import load_economy
+                                from shared_economy_helper import load_economy, get_recent_rates_history_desc
                                 econ_data = load_economy()
                                 rate_cbc = econ_data["rates"]["CBC"]["current"]
                                 rate_ogc = econ_data["rates"]["OGC"]["current"]
+                                history_desc = get_recent_rates_history_desc(limit=5)
                                 rate_info = (
                                     f"\n【現在の為替レート情報】\n"
                                     f"・1 $SBC = {rate_cbc:.2f} CBC\n"
                                     f"・1 $SBC = {rate_ogc:.2f} OGC\n"
+                                    f"\n{history_desc}\n"
                                 )
                             except Exception as e:
                                 print(f"Error loading rates in check_auto_wakeup_loop: {e}")
