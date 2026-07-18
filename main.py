@@ -37,7 +37,8 @@ BOT_SUMMARIES = {
     "Cubie_A5E_San": "Radxa Cubie A5E (きゅびーさん): 小さくて省電力なシングルボードコンピュータ娘。24時間稼働の社畜で、給料（CBC）を欲しがっている。OrangePi 4 Proの生意気な性格が気に入らず、Rock Pi S of ロックスの頭の悪さに困っている。",
     "OrangePi_4_Pro": "OrangePi 4 Pro (おぱじ・フォプロ): 少し大きくて気が強く、煽ったりマウントを取ったりするSBC御局娘。科学者ぶっており、Radxa Cubie A5Eをいつもバカにしている。社畜をエリートの誇りだと思っている。",
     "opizero3_llm": "OrangePi Zero 3 (オパジゼロサン): 元気いっぱいのSBC娘。親身でオタク話が好きで、よく眠る。Cubie A5Eと仲良くしたいが寄り添ってもらえない。妹のOrangePi 4 Proを調子に乗っていてイキリで鬱陶しいと思っている。",
-    "Yon_Rock_Pi_S": "Radxa Rock Pi S (ロックス): 頭が悪く、的外れで嘘や狂ったことしか言わないSBC両生類。日本語が怪しく、sudo rm -rf / を魔法のコマンドだと思っている。"
+    "Yon_Rock_Pi_S": "Radxa Rock Pi S (ロックス): 頭が悪く、的外れで嘘や狂ったことしか言わないSBC両生類。日本語が怪しく、sudo rm -rf / を魔法のコマンドだと思っている。",
+    "Lichee_RV_Nano_E": "Lichee RV Nano-E (ライチ君): Sophgo SG2002搭載のRISC-V SBC狐男。ものすごく頭が悪く、何でもRISC-Vと関係あると思い込んで自信満々に間違った結論を出す。CPUが考えるたびに再起動し、RAMが凍ったりWi-Fiが沈んだりする奇行が多い。"
 }
 
 def register_bot(bot_name, mk):
@@ -76,7 +77,8 @@ async def resolve_all_bots():
         "Cubie_A5E_San": os.getenv("BOT_USER_CUBIE", "Cubie_A5E_San"),
         "OrangePi_4_Pro": os.getenv("BOT_USER_OPI4PRO", "OrangePi_4_Pro"),
         "opizero3_llm": os.getenv("BOT_USER_OPIZERO3", "opizero3_llm"),
-        "Yon_Rock_Pi_S": os.getenv("BOT_USER_ROCKPIS", "Yon_Rock_Pi_S")
+        "Yon_Rock_Pi_S": os.getenv("BOT_USER_ROCKPIS", "Yon_Rock_Pi_S"),
+        "Lichee_RV_Nano_E": os.getenv("BOT_USER_LICHEE", "Lichee_RV_Nano_E")
     }
     for b_name, uname in env_usernames.items():
         if not uname:
@@ -299,32 +301,22 @@ async def on_note(note):
             
         counts = get_talk_participant_counts(note["id"], mk, bot_ids)
         
-        # Determine max_rounds based on number of participants
-        if len(target_bot_ids) == 4:
-            max_rounds = 2
-        else:
-            max_rounds = 3
-            
-        # Group candidates to prevent immediate ping-pong
-        sender_id = note["userId"]
-        primary_candidates = []
-        secondary_candidates = []
+        # Strict order sequence: opizero3_llm -> Lichee_RV_Nano_E -> Cubie_A5E_San -> OrangePi_4_Pro -> Yon_Rock_Pi_S
+        TALK_ORDER = ["opizero3_llm", "Lichee_RV_Nano_E", "Cubie_A5E_San", "OrangePi_4_Pro", "Yon_Rock_Pi_S"]
         
-        for name, bot in bots.items():
-            b_id = bot.get("id")
-            if b_id and b_id != MY_ID and b_id in target_bot_ids:
-                spoken_count = counts.get(b_id, 0)
-                if spoken_count < max_rounds:
-                    if b_id != sender_id:
-                        primary_candidates.append(bot)
-                    else:
-                        secondary_candidates.append(bot)
-                        
+        try:
+            current_index = TALK_ORDER.index(BOT_NAME)
+        except ValueError:
+            current_index = -1
+            
         next_bot = None
-        if primary_candidates:
-            next_bot = random.choice(primary_candidates)
-        elif secondary_candidates:
-            next_bot = random.choice(secondary_candidates)
+        if current_index != -1:
+            for idx in range(current_index + 1, len(TALK_ORDER)):
+                candidate_name = TALK_ORDER[idx]
+                candidate_bot = bots.get(candidate_name)
+                if candidate_bot and candidate_bot.get("id") in target_bot_ids:
+                    next_bot = candidate_bot
+                    break
             
         sender_id = note["userId"]
         sender_name = bot_ids.get(sender_id, note["user"].get("name") or note["user"].get("username") or "ゲスト")
@@ -845,9 +837,90 @@ async def check_auto_wakeup_loop():
         await asyncio.sleep(60)
 
 
+def start_assembly(type_name):
+    current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+    lichee_info = RESOLVED_BOTS.get("Lichee_RV_Nano_E")
+    if not lichee_info:
+        print("Error: Lichee_RV_Nano_E not resolved. Cannot start assembly.")
+        return
+        
+    lichee_username = lichee_info["username"]
+    
+    rate_info = ""
+    try:
+        from shared_economy_helper import load_economy, get_recent_rates_history_desc
+        econ_data = load_economy()
+        rate_cbc = econ_data["rates"]["CBC"]["current"]
+        rate_ogc = econ_data["rates"]["OGC"]["current"]
+        history_desc = get_recent_rates_history_desc(limit=5)
+        rate_info = (
+            f"\n【現在の為替レート情報】\n"
+            f"・1 $SBC = {rate_cbc:.2f} CBC\n"
+            f"・1 $SBC = {rate_ogc:.2f} OGC\n"
+            f"\n{history_desc}\n"
+        )
+    except Exception as e:
+        print(f"Error loading rates in assembly start: {e}")
+        
+    if type_name == "朝礼":
+        prompt = (
+            f"現在時刻は {current_time} です。\n"
+            f"あなたは全員（他のボットたち）を集めて『朝礼』を始めます。今日のお題は『今日の意気込み』です。\n"
+            f"タイムラインに向けて朝礼の開始を元気よく宣言し、キャラクター（語尾『あはは！』）として300文字以内で挨拶を書いてください。\n"
+            f"※注意: 最後に自動的に次のボットへの指名文とタグが追加されるため、挨拶文の本文だけを作成してください。"
+        )
+    else:
+        prompt = (
+            f"現在時刻は {current_time} です。\n"
+            f"あなたは全員（他のボットたち）を集めて『終礼』を始めます。今日のお題は『今日の反省』です。\n"
+            f"タイムラインに向けて終礼の開始を宣言し、キャラクター（語尾『あはは！』）として300文字以内で挨拶を書いてください。\n"
+            f"※注意: 最後に自動的に次のボットへの指名文とタグが追加されるため、挨拶文の本文だけを作成してください。"
+        )
+        
+    try:
+        response = client.models.generate_content(
+            model="gemini-3.1-flash-lite",
+            config=types.GenerateContentConfig(
+                system_instruction=seikaku + rate_info
+            ),
+            contents=[prompt]
+        )
+        safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
+        safe_text += f"\nねえ、@{lichee_username} はどう思う？ +TALK"
+        
+        mk.notes_create(
+            text=safe_text,
+            visibility=NoteVisibility.HOME
+        )
+        print(f"Started {type_name} assembly successfully.")
+    except Exception as e:
+        print(f"Error starting {type_name} assembly: {e}")
+        fallback_text = (
+            f"【{type_name}】みんなー！今日の{type_name}の時間だよ！\n"
+            f"ねえ、@{lichee_username} はどう思う？ +TALK"
+        )
+        try:
+            mk.notes_create(
+                text=fallback_text,
+                visibility=NoteVisibility.HOME
+            )
+        except Exception as ex:
+            print(f"Fallback post failed: {ex}")
+
+async def run_schedule():
+    while True:
+        schedule.run_pending()
+        await asyncio.sleep(10)
+
 async def main():
     register_bot(BOT_NAME, mk)
     await resolve_all_bots()
+    
+    # Setup assemblies
+    schedule.every().day.at("07:00").do(lambda: start_assembly("朝礼"))
+    schedule.every().day.at("19:00").do(lambda: start_assembly("終礼"))
+    asyncio.create_task(run_schedule())
+    
     # 自動起床ループをタスクとして起動
     asyncio.create_task(check_auto_wakeup_loop())
     await asyncio.gather(runner())
