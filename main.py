@@ -4,7 +4,8 @@ import websockets
 from misskey import Misskey, NoteVisibility
 from dotenv import load_dotenv
 import os
-from openrouter_helper import generate_llm_reply
+from google import genai
+from google.genai import types
 import schedule
 from datetime import datetime
 import random
@@ -16,8 +17,12 @@ import requests
 load_dotenv()
 Token = os.getenv("TOKEN")
 Server = os.getenv("SERVER")
+Apikey = os.getenv("APIKEY")  # Gemini API Key
 mk = Misskey(Server)
 mk.token = Token
+
+# Google Genai クライアント初期化
+client = genai.Client(api_key=Apikey)
 
 # 状態管理マネージャーの初期化
 state_manager = StateManager()
@@ -336,8 +341,10 @@ async def on_note(note):
         
         conversation_messages = []
         for msg in history:
-            role = "assistant" if msg["role"] in ["assistant", "model"] else "user"
-            conversation_messages.append({"role": role, "content": msg["content"]})
+            role = "model" if msg["role"] == "assistant" else "user"
+            conversation_messages.append(
+                types.Content(role=role, parts=[types.Part(text=msg["content"])])
+            )
             
         instruction = seikaku + f"\n現在時刻は {datetime.now().strftime('%Y年%m月%d日 %H:%M')} です。\n"
         if next_bot:
@@ -370,10 +377,13 @@ async def on_note(note):
         await asyncio.sleep(random.uniform(5.0, 10.0))
         
         try:
-            reply_text = generate_llm_reply(
-                system_instruction=instruction,
-                history=conversation_messages
+            response = client.models.generate_content(
+                model="gemini-3.1-flash-lite",
+                config=types.GenerateContentConfig(system_instruction=instruction),
+                contents=conversation_messages
             )
+            reply_text = response.text.strip()
+            reply_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", reply_text).strip()
             
             if next_bot:
                 reply_text += f"\nねえ、@{next_bot['username']} はどう思う？ +TALK"
@@ -629,6 +639,14 @@ async def on_note(note):
             )
             system_message += rate_rules
             
+            history = []
+            for msg in conversation_messages[:-1]:
+                role = "model" if msg["role"] == "assistant" else "user"
+                history.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
+            
+            last_user_message = conversation_messages[-1]["content"]
+            
+            # 画像の取得とダウンロード
             image_parts = []
             loop = asyncio.get_running_loop()
             for file in note.get("files", []):
@@ -639,28 +657,36 @@ async def on_note(note):
                         try:
                             img_bytes = await loop.run_in_executor(None, lambda u=url: requests.get(u, timeout=10).content)
                             if img_bytes:
-                                image_parts.append((img_bytes, mime_type))
+                                image_parts.append(
+                                    types.Part.from_bytes(
+                                        data=img_bytes,
+                                        mime_type=mime_type
+                                    )
+                                )
                         except Exception as e:
                             print(f"Error downloading image {url}: {e}")
+
+            last_user_parts = [types.Part(text=last_user_message)] if last_user_message else []
+            if image_parts:
+                last_user_parts.extend(image_parts)
+            if not last_user_parts:
+                last_user_parts = [types.Part(text="")]
+
+            contents = history + [types.Content(role="user", parts=last_user_parts)]
 
         if temp_info:
             system_message += temp_info
 
         # LLMリクエスト送信
-        if is_llm_cmd or is_temp_cmd:
-            last_user_message = conversation_messages[-1]["content"]
-            reply_text = generate_llm_reply(
-                system_instruction=system_message,
-                user_prompt=last_user_message,
-                history=conversation_messages[:-1],
-                image_parts=image_parts
-            )
-        else:
-            prompt_text = contents[0] if (contents and isinstance(contents[0], str)) else ""
-            reply_text = generate_llm_reply(
-                system_instruction=system_message,
-                user_prompt=prompt_text
-            )
+        response = client.models.generate_content(
+            model="gemini-3.1-flash-lite",
+            config=types.GenerateContentConfig(
+                system_instruction=system_message
+            ),
+            contents=contents
+        )
+        
+        reply_text = response.text
         
         # 好感度タグと為替操作タグのパース
         delta = 0
@@ -740,10 +766,14 @@ async def check_auto_wakeup_loop():
                         )
                         
                         try:
-                            safe_text = generate_llm_reply(
-                                system_instruction=system_message,
-                                user_prompt="おはようのノートを作成してください。"
+                            response = client.models.generate_content(
+                                model="gemini-3.1-flash-lite",
+                                config=types.GenerateContentConfig(
+                                    system_instruction=system_message
+                                ),
+                                contents=["おはようのノートを作成してください。"]
                             )
+                            safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
                             
                             mk.notes_create(
                                 text=safe_text,
@@ -795,10 +825,14 @@ async def check_auto_wakeup_loop():
                             )
                             
                             try:
-                                safe_text = generate_llm_reply(
-                                    system_instruction=system_message,
-                                    user_prompt="眠そうなおやすみのノートを作成してください。"
+                                response = client.models.generate_content(
+                                    model="gemini-3.1-flash-lite",
+                                    config=types.GenerateContentConfig(
+                                        system_instruction=system_message
+                                    ),
+                                    contents=["眠そうなおやすみのノートを作成してください。"]
                                 )
+                                safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
                                 
                                 mk.notes_create(
                                     text=safe_text,
@@ -859,10 +893,14 @@ def start_assembly(type_name):
         )
         
     try:
-        safe_text = generate_llm_reply(
-            system_instruction=seikaku + rate_info,
-            user_prompt=prompt
+        response = client.models.generate_content(
+            model="gemini-3.1-flash-lite",
+            config=types.GenerateContentConfig(
+                system_instruction=seikaku + rate_info
+            ),
+            contents=[prompt]
         )
+        safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
         safe_text += f"\nねえ、@{lichee_username} はどう思う？ +TALK"
         
         mk.notes_create(
