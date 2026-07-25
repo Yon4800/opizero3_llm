@@ -378,7 +378,7 @@ async def on_note(note):
         
         try:
             response = client.models.generate_content(
-                model="gemini-3.1-flash-lite",
+                model="gemini-3.5-flash-lite",
                 config=types.GenerateContentConfig(system_instruction=instruction),
                 contents=conversation_messages
             )
@@ -679,7 +679,7 @@ async def on_note(note):
 
         # LLMリクエスト送信
         response = client.models.generate_content(
-            model="gemini-3.1-flash-lite",
+            model="gemini-3.5-flash-lite",
             config=types.GenerateContentConfig(
                 system_instruction=system_message
             ),
@@ -767,7 +767,7 @@ async def check_auto_wakeup_loop():
                         
                         try:
                             response = client.models.generate_content(
-                                model="gemini-3.1-flash-lite",
+                                model="gemini-3.5-flash-lite",
                                 config=types.GenerateContentConfig(
                                     system_instruction=system_message
                                 ),
@@ -826,7 +826,7 @@ async def check_auto_wakeup_loop():
                             
                             try:
                                 response = client.models.generate_content(
-                                    model="gemini-3.1-flash-lite",
+                                    model="gemini-3.5-flash-lite",
                                     config=types.GenerateContentConfig(
                                         system_instruction=system_message
                                     ),
@@ -894,7 +894,7 @@ def start_assembly(type_name):
         
     try:
         response = client.models.generate_content(
-            model="gemini-3.1-flash-lite",
+            model="gemini-3.5-flash-lite",
             config=types.GenerateContentConfig(
                 system_instruction=seikaku + rate_info
             ),
