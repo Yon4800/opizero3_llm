@@ -686,7 +686,7 @@ async def on_note(note):
             contents=contents
         )
         
-        reply_text = response.text
+        reply_text = response.text or "（うーん、うまく返答できなかったみたい...）"
         
         # 好感度タグと為替操作タグのパース
         delta = 0
