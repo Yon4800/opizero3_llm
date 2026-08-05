@@ -162,8 +162,8 @@ def _read_dht_mmap(physical_pin, sensor_type=11):
                     logger.warning("DHT mmap: timeout waiting for data start")
                     return None, None
 
-            # --- Read 40 bits ---
-            data = []
+            # --- Read 40 bits: record HIGH pulse durations ---
+            durations = []
             for bit_i in range(40):
                 # Wait for bit LOW → HIGH transition
                 t = time.perf_counter()
@@ -182,10 +182,17 @@ def _read_dht_mmap(physical_pin, sensor_type=11):
                             break
                         logger.warning(f"DHT mmap: timeout at bit {bit_i} HIGH")
                         return None, None
-                duration_us = (time.perf_counter() - t_high) * 1_000_000
+                durations.append(time.perf_counter() - t_high)
 
-                # DHT11: '0' ≈ 26-28 µs, '1' ≈ 70 µs  →  threshold 40 µs
-                data.append(1 if duration_us > 40 else 0)
+            # Dynamic threshold: use median of all durations
+            # '0' bits ≈ 26-28 µs, '1' bits ≈ 70 µs — median splits them
+            sorted_d = sorted(durations)
+            threshold = (sorted_d[len(sorted_d) // 2 - 1] + sorted_d[len(sorted_d) // 2]) / 2
+            data = [1 if d > threshold else 0 for d in durations]
+            logger.debug(
+                f"DHT durations (µs): {[f'{d*1e6:.0f}' for d in durations]}, "
+                f"threshold={threshold*1e6:.0f}µs"
+            )
 
             # --- Parse 5 bytes ---
             byte_data = []
