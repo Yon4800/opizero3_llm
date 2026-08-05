@@ -43,7 +43,10 @@ def read_dht():
     # 3. Try dht11 (szazo/DHT11_Python)
     try:
         import dht11
-        import RPi.GPIO as GPIO
+        try:
+            import RPi.GPIO as GPIO
+        except ImportError:
+            import OPi.GPIO as GPIO
         GPIO.setmode(GPIO.BCM)
         instance = dht11.DHT11(pin=DHT_PIN)
         result = instance.read()
