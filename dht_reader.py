@@ -174,6 +174,10 @@ def _read_dht_mmap(physical_pin, sensor_type=11):
                 t_high = time.perf_counter()
                 while _read_pin() == 1:
                     if time.perf_counter() - t_high > TIMEOUT:
+                        # Last bit (bit 39): sensor releases line, stays HIGH
+                        # This is normal — use measured duration so far
+                        if bit_i == 39:
+                            break
                         logger.warning(f"DHT mmap: timeout at bit {bit_i} HIGH")
                         return None, None
                 duration_us = (time.perf_counter() - t_high) * 1_000_000
