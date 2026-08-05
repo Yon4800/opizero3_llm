@@ -132,12 +132,14 @@ def _read_dht_mmap(physical_pin, sensor_type=11):
         TIMEOUT = 0.002  # 2 ms timeout per phase
 
         try:
-            # --- DHT start signal ---
+            # --- Reset: hold HIGH to ensure sensor is in idle state ---
             _set_output()
             _pin_high()
-            time.sleep(0.001)
+            time.sleep(0.5)      # 500 ms HIGH reset pulse
+
+            # --- DHT start signal ---
             _pin_low()
-            time.sleep(0.018)    # 18 ms LOW
+            time.sleep(0.020)    # 20 ms LOW (spec: min 18ms)
             _pin_high()
             time.sleep(0.000040) # 40 µs HIGH
 
@@ -369,11 +371,11 @@ def read_dht():
 
     # 3. Direct /dev/mem GPIO register access (Orange Pi Zero 3 / H618, best timing)
     try:
-        for attempt in range(3):
+        for attempt in range(5):
             temp, hum = _read_dht_mmap(DHT_PIN, DHT_TYPE)
             if temp is not None and hum is not None:
                 return temp, hum
-            time.sleep(1)
+            time.sleep(2)  # DHT11 spec: min 2 seconds between reads
         logger.warning(
             f"mmap DHT read returned None after 3 attempts "
             f"(physical_pin={DHT_PIN}, gpio=GPIO{sunxi_num}). "
