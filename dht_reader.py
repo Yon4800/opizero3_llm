@@ -9,17 +9,25 @@ logger = logging.getLogger(__name__)
 # DHT_PIN: Physical pin number or BCM pin number depending on the library.
 DHT_PIN = int(os.getenv("DHT_PIN", "4"))
 DHT_TYPE = int(os.getenv("DHT_TYPE", "11"))
+# DHT_GPIO_MODE: OPi.GPIO pin numbering mode.
+# "BOARD" = physical pin number on the header (e.g. pin 7)
+# "SUNXI" = Allwinner SoC GPIO number (e.g. PA7 = 7, PC7 = 71)
+DHT_GPIO_MODE = os.getenv("DHT_GPIO_MODE", "BOARD")
 
 
-def _read_dht_opi_gpio(pin, sensor_type=11):
+def _read_dht_opi_gpio(pin, sensor_type=11, gpio_mode="BOARD"):
     """
     Reads DHT11/DHT22 sensor using OPi.GPIO with direct bit-bang protocol.
     For Orange Pi (Allwinner / non-Raspberry Pi SBC).
+    gpio_mode: "BOARD" (physical pin) or "SUNXI" (Allwinner SoC GPIO number)
     Returns (temperature, humidity) or (None, None) on failure.
     """
     import OPi.GPIO as GPIO
 
-    GPIO.setmode(GPIO.BOARD)
+    if gpio_mode == "SUNXI":
+        GPIO.setmode(GPIO.SUNXI)
+    else:
+        GPIO.setmode(GPIO.BOARD)
     GPIO.setup(pin, GPIO.OUT)
 
     # Send start signal: pull LOW for 18ms, then HIGH
@@ -129,15 +137,24 @@ def read_dht():
 
     # 3. Try OPi.GPIO native bit-bang (Orange Pi / non-RPi SBCs)
     try:
-        temp, hum = _read_dht_opi_gpio(DHT_PIN, DHT_TYPE)
+        temp, hum = _read_dht_opi_gpio(DHT_PIN, DHT_TYPE, DHT_GPIO_MODE)
         if temp is not None and hum is not None:
             return temp, hum
         else:
-            logger.warning("OPi.GPIO bit-bang read returned None (sensor not connected or read error)")
+            logger.warning(f"OPi.GPIO bit-bang read returned None (pin={DHT_PIN}, mode={DHT_GPIO_MODE}). Check sensor wiring.")
     except ImportError:
         pass
     except Exception as e:
-        logger.warning(f"Failed to read from OPi.GPIO bit-bang: {e}")
+        logger.warning(f"Failed to read from OPi.GPIO bit-bang (pin={DHT_PIN}, mode={DHT_GPIO_MODE}): {e!r}")
+        # If BOARD mode failed, automatically retry with SUNXI mode
+        if DHT_GPIO_MODE == "BOARD":
+            try:
+                logger.info("Retrying OPi.GPIO with SUNXI mode...")
+                temp, hum = _read_dht_opi_gpio(DHT_PIN, DHT_TYPE, "SUNXI")
+                if temp is not None and hum is not None:
+                    return temp, hum
+            except Exception as e2:
+                logger.warning(f"OPi.GPIO SUNXI mode also failed (pin={DHT_PIN}): {e2!r}")
 
     # 4. Try dht11 (szazo/DHT11_Python) - Raspberry Pi only, kept as last resort
     try:
