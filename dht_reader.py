@@ -6,115 +6,184 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Load configuration from environment
-# DHT_PIN: Physical pin number or BCM pin number depending on the library.
-DHT_PIN = int(os.getenv("DHT_PIN", "4"))
+# DHT_PIN: Physical pin number on the 26-pin header (default: 7 = PC9 for OPi Zero 3)
+DHT_PIN = int(os.getenv("DHT_PIN", "7"))
 DHT_TYPE = int(os.getenv("DHT_TYPE", "11"))
-# DHT_GPIO_MODE: OPi.GPIO pin numbering mode.
-# "BOARD" = physical pin number on the header (e.g. pin 7)
-# "SUNXI" = Allwinner SoC GPIO number (e.g. PA7 = 7, PC7 = 71)
+# DHT_GPIO_MODE: "BOARD" (physical pin number, default) or "SUNXI" (SoC GPIO number)
 DHT_GPIO_MODE = os.getenv("DHT_GPIO_MODE", "BOARD")
 
+# Orange Pi Zero 3 physical pin → Allwinner H618 SUNXI GPIO number
+# Formula: PC_n = 64 + n, PH_n = 224 + n
+_OPI_ZERO3_BOARD_TO_SUNXI = {
+    3:  229,  # PH5
+    5:  228,  # PH4
+    7:  73,   # PC9  ← recommended for DHT11
+    8:  226,  # PH2
+    10: 227,  # PH3
+    11: 75,   # PC11
+    12: 70,   # PC6
+    13: 69,   # PC5
+    15: 72,   # PC8
+    16: 79,   # PC15
+    18: 78,   # PC14
+    19: 231,  # PH7
+    21: 232,  # PH8
+    22: 71,   # PC7
+    23: 230,  # PH6
+    24: 233,  # PH9
+    26: 74,   # PC10
+}
 
-def _read_dht_opi_gpio(pin, sensor_type=11, gpio_mode="BOARD"):
+
+def _get_sunxi_num(physical_pin):
+    """Convert physical pin number to SUNXI (SoC) GPIO number for Orange Pi Zero 3."""
+    return _OPI_ZERO3_BOARD_TO_SUNXI.get(physical_pin, physical_pin)
+
+
+def _read_dht_sysfs(physical_pin, sensor_type=11):
     """
-    Reads DHT11/DHT22 sensor using OPi.GPIO with direct bit-bang protocol.
-    For Orange Pi (Allwinner / non-Raspberry Pi SBC).
-    gpio_mode: "BOARD" (physical pin) or "SUNXI" (Allwinner SoC GPIO number)
+    Reads DHT11/DHT22 via Linux sysfs GPIO interface.
+    Works on any Linux SBC (Orange Pi, Rock Pi, etc.) without board-specific libraries.
+    Requires read/write access to /sys/class/gpio (run with sudo or add user to gpio group).
     Returns (temperature, humidity) or (None, None) on failure.
     """
-    import OPi.GPIO as GPIO
+    gpio_num = _get_sunxi_num(physical_pin)
+    gpio_path = f"/sys/class/gpio/gpio{gpio_num}"
+    export_path = "/sys/class/gpio/export"
+    unexport_path = "/sys/class/gpio/unexport"
+    direction_path = f"{gpio_path}/direction"
+    value_path = f"{gpio_path}/value"
 
-    if gpio_mode == "SUNXI":
-        GPIO.setmode(GPIO.SUNXI)
-    else:
-        GPIO.setmode(GPIO.BOARD)
-    GPIO.setup(pin, GPIO.OUT)
+    # Export GPIO if not already exported
+    if not os.path.exists(gpio_path):
+        try:
+            with open(export_path, 'w') as f:
+                f.write(str(gpio_num))
+            time.sleep(0.1)
+        except PermissionError:
+            raise PermissionError(
+                f"Cannot export GPIO{gpio_num}. "
+                "Run with sudo, or add user to gpio group: sudo usermod -aG gpio $USER"
+            )
 
-    # Send start signal: pull LOW for 18ms, then HIGH
-    GPIO.output(pin, GPIO.LOW)
-    time.sleep(0.018)
-    GPIO.output(pin, GPIO.HIGH)
-    time.sleep(0.00004)
+    def _set_dir(direction):
+        with open(direction_path, 'w') as f:
+            f.write(direction)
 
-    # Switch to input to receive data
-    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    def _write(val):
+        with open(value_path, 'w') as f:
+            f.write('1' if val else '0')
 
-    # Wait for sensor response (LOW then HIGH)
-    timeout = 0
-    while GPIO.input(pin) == GPIO.HIGH:
-        timeout += 1
-        if timeout > 10000:
-            return None, None
-    timeout = 0
-    while GPIO.input(pin) == GPIO.LOW:
-        timeout += 1
-        if timeout > 10000:
-            return None, None
-    timeout = 0
-    while GPIO.input(pin) == GPIO.HIGH:
-        timeout += 1
-        if timeout > 10000:
-            return None, None
+    # Pre-open value file for fast reading
+    _vfd = None
+    def _read():
+        os.lseek(_vfd, 0, os.SEEK_SET)
+        return int(os.read(_vfd, 1))
 
-    # Read 40 bits of data
-    data = []
-    for _ in range(40):
-        # Wait for bit start (LOW pulse)
-        timeout = 0
-        while GPIO.input(pin) == GPIO.LOW:
-            timeout += 1
-            if timeout > 10000:
+    try:
+        # Send DHT start signal: HIGH → LOW 18ms → HIGH 40us
+        _set_dir('out')
+        _write(1)
+        time.sleep(0.001)
+        _write(0)
+        time.sleep(0.018)   # 18ms LOW
+        _write(1)
+        time.sleep(0.00004) # 40us HIGH
+
+        # Switch to input for data reading
+        _set_dir('in')
+        _vfd = os.open(value_path, os.O_RDONLY)
+
+        # Wait for sensor acknowledgement (LOW then HIGH then LOW)
+        t = time.perf_counter()
+        while _read() == 1:
+            if time.perf_counter() - t > 0.001:
+                return None, None  # timeout
+        t = time.perf_counter()
+        while _read() == 0:
+            if time.perf_counter() - t > 0.001:
+                return None, None
+        t = time.perf_counter()
+        while _read() == 1:
+            if time.perf_counter() - t > 0.001:
                 return None, None
 
-        # Measure HIGH pulse width to determine bit value
-        # < 28us = 0, >= 28us = 1 (DHT11 spec)
-        count = 0
-        while GPIO.input(pin) == GPIO.HIGH:
-            count += 1
-            if count > 10000:
-                return None, None
-        data.append(1 if count > 16 else 0)
+        # Read 40 bits: each bit starts with ~50us LOW, then HIGH
+        # HIGH < 28us = 0, HIGH >= 28us = 1 (DHT11 spec)
+        data = []
+        for _ in range(40):
+            # Wait for LOW → HIGH transition (bit start)
+            t = time.perf_counter()
+            while _read() == 0:
+                if time.perf_counter() - t > 0.001:
+                    return None, None
 
-    GPIO.cleanup()
+            # Measure HIGH pulse duration
+            t_high = time.perf_counter()
+            while _read() == 1:
+                if time.perf_counter() - t_high > 0.001:
+                    return None, None
+            duration_ns = (time.perf_counter() - t_high) * 1e9
 
-    # Parse 5 bytes from 40 bits
-    byte_data = []
-    for i in range(5):
-        byte_val = 0
-        for bit in data[i * 8:(i + 1) * 8]:
-            byte_val = (byte_val << 1) | bit
-        byte_data.append(byte_val)
+            # > 40us HIGH = bit 1, < 40us HIGH = bit 0
+            data.append(1 if duration_ns > 40000 else 0)
 
-    # Verify checksum
-    checksum = (byte_data[0] + byte_data[1] + byte_data[2] + byte_data[3]) & 0xFF
-    if checksum != byte_data[4]:
-        logger.warning(f"DHT checksum error: expected {byte_data[4]}, got {checksum}")
-        return None, None
+        os.close(_vfd)
+        _vfd = None
 
-    if sensor_type == 11:
-        humidity = float(byte_data[0])
-        temperature = float(byte_data[2])
-    else:
-        # DHT22
-        humidity = ((byte_data[0] << 8) | byte_data[1]) / 10.0
-        temperature = (((byte_data[2] & 0x7F) << 8) | byte_data[3]) / 10.0
-        if byte_data[2] & 0x80:
-            temperature = -temperature
+        # Parse 5 bytes from 40 bits
+        byte_data = []
+        for i in range(5):
+            byte_val = 0
+            for bit in data[i * 8:(i + 1) * 8]:
+                byte_val = (byte_val << 1) | bit
+            byte_data.append(byte_val)
 
-    return temperature, humidity
+        # Verify checksum
+        checksum = (byte_data[0] + byte_data[1] + byte_data[2] + byte_data[3]) & 0xFF
+        if checksum != byte_data[4]:
+            logger.warning(
+                f"DHT sysfs checksum error: expected {byte_data[4]}, "
+                f"got {checksum}. Raw: {byte_data}"
+            )
+            return None, None
+
+        if sensor_type == 11:
+            humidity = float(byte_data[0])
+            temperature = float(byte_data[2])
+        else:
+            # DHT22
+            humidity = ((byte_data[0] << 8) | byte_data[1]) / 10.0
+            temperature = (((byte_data[2] & 0x7F) << 8) | byte_data[3]) / 10.0
+            if byte_data[2] & 0x80:
+                temperature = -temperature
+
+        return temperature, humidity
+
+    finally:
+        if _vfd is not None:
+            try:
+                os.close(_vfd)
+            except Exception:
+                pass
+        # Unexport GPIO to clean up
+        try:
+            with open(unexport_path, 'w') as f:
+                f.write(str(gpio_num))
+        except Exception:
+            pass
 
 
 def read_dht():
     """
     Reads temperature and humidity from DHT sensor.
-    Tries multiple libraries. If all fail or are unavailable, returns mock values (when in development).
+    Tries multiple libraries in order. Falls back to mock values in dev/Windows env.
     Returns (temperature, humidity) or (None, None) if measurement fails.
     """
     # 1. Try Rockfruit_DHT (recommended for Radxa/Rock Pi)
     try:
         import Rockfruit_DHT as rockfruit_dht
         sensor = rockfruit_dht.DHT11 if DHT_TYPE == 11 else rockfruit_dht.DHT22
-        # Rockfruit_DHT.read_retry returns (humidity, temperature)
         humidity, temperature = rockfruit_dht.read_retry(sensor, DHT_PIN)
         if temperature is not None and humidity is not None:
             return temperature, humidity
@@ -135,26 +204,25 @@ def read_dht():
     except Exception as e:
         logger.warning(f"Failed to read from Adafruit_DHT: {e}")
 
-    # 3. Try OPi.GPIO native bit-bang (Orange Pi / non-RPi SBCs)
+    # 3. Try Linux sysfs GPIO bit-bang (Orange Pi Zero 3 and other non-RPi SBCs)
+    #    Requires sudo or gpio group membership.
+    #    DHT_PIN must be the physical pin number on the 26-pin header.
+    sunxi_num = _get_sunxi_num(DHT_PIN)
     try:
-        temp, hum = _read_dht_opi_gpio(DHT_PIN, DHT_TYPE, DHT_GPIO_MODE)
-        if temp is not None and hum is not None:
-            return temp, hum
-        else:
-            logger.warning(f"OPi.GPIO bit-bang read returned None (pin={DHT_PIN}, mode={DHT_GPIO_MODE}). Check sensor wiring.")
-    except ImportError:
-        pass
+        for attempt in range(3):
+            temp, hum = _read_dht_sysfs(DHT_PIN, DHT_TYPE)
+            if temp is not None and hum is not None:
+                return temp, hum
+            time.sleep(1)
+        logger.warning(
+            f"sysfs DHT read returned None after 3 attempts "
+            f"(physical_pin={DHT_PIN}, gpio=GPIO{sunxi_num}). "
+            "Check sensor wiring and pin number."
+        )
+    except PermissionError as e:
+        logger.error(f"sysfs GPIO permission error: {e}")
     except Exception as e:
-        logger.warning(f"Failed to read from OPi.GPIO bit-bang (pin={DHT_PIN}, mode={DHT_GPIO_MODE}): {e!r}")
-        # If BOARD mode failed, automatically retry with SUNXI mode
-        if DHT_GPIO_MODE == "BOARD":
-            try:
-                logger.info("Retrying OPi.GPIO with SUNXI mode...")
-                temp, hum = _read_dht_opi_gpio(DHT_PIN, DHT_TYPE, "SUNXI")
-                if temp is not None and hum is not None:
-                    return temp, hum
-            except Exception as e2:
-                logger.warning(f"OPi.GPIO SUNXI mode also failed (pin={DHT_PIN}): {e2!r}")
+        logger.warning(f"Failed to read from sysfs GPIO (pin={DHT_PIN}, gpio={sunxi_num}): {e!r}")
 
     # 4. Try dht11 (szazo/DHT11_Python) - Raspberry Pi only, kept as last resort
     try:
@@ -185,11 +253,9 @@ def read_dht():
     except Exception as e:
         logger.warning(f"Failed to read from pigpio_dht: {e}")
 
-    # Fallback to mock value if running in non-SBC/Windows environment or if libraries are missing
+    # Fallback: mock values for Windows / dev environment
     is_development = os.name == 'nt' or os.getenv("DHT_MOCK", "false").lower() == "true"
     if is_development:
-        # Generate mock values
-        # Temperature: 18.0 to 28.0, Humidity: 40.0 to 70.0
         mock_temp = random.uniform(18.0, 28.0)
         mock_hum = random.uniform(40.0, 70.0)
         logger.info(f"Using mock DHT data (Dev Mode): Temp={mock_temp:.1f}°C, Hum={mock_hum:.1f}%")
