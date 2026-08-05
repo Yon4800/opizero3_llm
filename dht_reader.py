@@ -184,14 +184,23 @@ def _read_dht_mmap(physical_pin, sensor_type=11):
                         return None, None
                 durations.append(time.perf_counter() - t_high)
 
-            # Dynamic threshold: use median of all durations
-            # '0' bits ≈ 26-28 µs, '1' bits ≈ 70 µs — median splits them
+            # Dynamic threshold: find largest gap between sorted durations
+            # '0' bits cluster around ~26µs, '1' bits around ~70µs
+            # The largest gap between consecutive sorted values is the natural split
             sorted_d = sorted(durations)
-            threshold = (sorted_d[len(sorted_d) // 2 - 1] + sorted_d[len(sorted_d) // 2]) / 2
+            max_gap = 0
+            gap_idx = 0
+            for i in range(len(sorted_d) - 1):
+                gap = sorted_d[i + 1] - sorted_d[i]
+                if gap > max_gap:
+                    max_gap = gap
+                    gap_idx = i
+            threshold = (sorted_d[gap_idx] + sorted_d[gap_idx + 1]) / 2
             data = [1 if d > threshold else 0 for d in durations]
-            logger.debug(
-                f"DHT durations (µs): {[f'{d*1e6:.0f}' for d in durations]}, "
-                f"threshold={threshold*1e6:.0f}µs"
+            logger.info(
+                f"DHT pulse threshold={threshold*1e6:.0f}µs, "
+                f"min={sorted_d[0]*1e6:.0f}µs, max={sorted_d[-1]*1e6:.0f}µs, "
+                f"gap_at={sorted_d[gap_idx]*1e6:.0f}-{sorted_d[gap_idx+1]*1e6:.0f}µs"
             )
 
             # --- Parse 5 bytes ---
@@ -207,7 +216,8 @@ def _read_dht_mmap(physical_pin, sensor_type=11):
             if chk != byte_data[4]:
                 logger.warning(
                     f"DHT mmap checksum error: expected {byte_data[4]}, "
-                    f"got {chk}. Raw bytes: {byte_data}"
+                    f"got {chk}. Raw bytes: {byte_data}. "
+                    f"Bits: {''.join(str(b) for b in data)}"
                 )
                 return None, None
 
@@ -220,6 +230,7 @@ def _read_dht_mmap(physical_pin, sensor_type=11):
                 if byte_data[2] & 0x80:
                     temperature = -temperature
 
+            logger.info(f"DHT read OK: temp={temperature}°C, hum={humidity}%, raw={byte_data}")
             return temperature, humidity
 
         finally:
