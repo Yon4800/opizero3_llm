@@ -162,66 +162,78 @@ def _read_dht_mmap(physical_pin, sensor_type=11):
                     logger.warning("DHT mmap: timeout waiting for data start")
                     return None, None
 
-            # --- Read 40 bits: count loop iterations for each HIGH pulse ---
-            # Using loop counts instead of time.perf_counter() avoids
-            # Python overhead distorting measurements
-            MAX_LOOPS = 10000
-            counts = []
+            # --- Read 40 bits using perf_counter with fixed threshold ---
+            # Measured distribution: '0' = 15-25µs, '1' = 60-70µs
+            THRESHOLD_US = 40
+            TIMEOUT_US = 500  # anything >500µs is a timeout (not a real bit)
+            durations_us = []
             for bit_i in range(40):
                 # Wait for bit LOW → HIGH transition
-                loop_count = 0
+                t = time.perf_counter()
                 while _read_pin() == 0:
-                    loop_count += 1
-                    if loop_count > MAX_LOOPS:
+                    if time.perf_counter() - t > TIMEOUT:
                         logger.warning(f"DHT mmap: timeout at bit {bit_i} LOW")
                         return None, None
 
-                # Count HIGH pulse width (proportional to bit value)
-                loop_count = 0
+                # Measure HIGH pulse duration
+                t_high = time.perf_counter()
                 while _read_pin() == 1:
-                    loop_count += 1
-                    if loop_count > MAX_LOOPS:
-                        # Last 2 bits (38-39): sensor may release line, stays HIGH
+                    if time.perf_counter() - t_high > TIMEOUT:
+                        # Last 2 bits: sensor may release line
                         if bit_i >= 38:
                             break
                         logger.warning(f"DHT mmap: timeout at bit {bit_i} HIGH")
                         return None, None
-                counts.append(loop_count)
+                durations_us.append((time.perf_counter() - t_high) * 1_000_000)
 
-            # Dynamic threshold: find largest gap between sorted loop counts
-            sorted_c = sorted(counts)
-            max_gap = 0
-            gap_idx = 0
-            for i in range(len(sorted_c) - 1):
-                gap = sorted_c[i + 1] - sorted_c[i]
-                if gap > max_gap:
-                    max_gap = gap
-                    gap_idx = i
-            threshold = (sorted_c[gap_idx] + sorted_c[gap_idx + 1]) / 2
-            data = [1 if c > threshold else 0 for c in counts]
-            logger.info(
-                f"DHT loop counts: min={sorted_c[0]}, max={sorted_c[-1]}, "
-                f"threshold={threshold:.0f}, "
-                f"gap_at={sorted_c[gap_idx]}-{sorted_c[gap_idx+1]}"
-            )
+            # Identify timed-out bits (>500µs) and normal bits
+            timeout_indices = [i for i, d in enumerate(durations_us) if d > TIMEOUT_US]
+            base_data = [1 if d > THRESHOLD_US else 0 for d in durations_us]
 
-            # --- Parse 5 bytes ---
-            byte_data = []
-            for i in range(5):
-                b = 0
-                for bit in data[i * 8:(i + 1) * 8]:
-                    b = (b << 1) | bit
-                byte_data.append(b)
+            # For timed-out bits, try all 0/1 combinations to find checksum match
+            def _try_parse(bits, stype):
+                byte_data = []
+                for i in range(5):
+                    b = 0
+                    for bit in bits[i * 8:(i + 1) * 8]:
+                        b = (b << 1) | bit
+                    byte_data.append(b)
+                chk = (byte_data[0] + byte_data[1] + byte_data[2] + byte_data[3]) & 0xFF
+                if chk != byte_data[4]:
+                    return None
+                return byte_data
 
-            # --- Verify checksum ---
-            chk = (byte_data[0] + byte_data[1] + byte_data[2] + byte_data[3]) & 0xFF
-            if chk != byte_data[4]:
-                logger.warning(
-                    f"DHT mmap checksum error: expected {byte_data[4]}, "
-                    f"got {chk}. Raw bytes: {byte_data}. "
-                    f"Bits: {''.join(str(b) for b in data)}"
-                )
-                return None, None
+            if timeout_indices:
+                # Try all combinations for timed-out bits
+                found = None
+                for combo in range(1 << len(timeout_indices)):
+                    trial = base_data[:]
+                    for j, idx in enumerate(timeout_indices):
+                        trial[idx] = (combo >> j) & 1
+                    result = _try_parse(trial, sensor_type)
+                    if result is not None:
+                        found = result
+                        logger.info(
+                            f"DHT resolved {len(timeout_indices)} timeout bit(s) "
+                            f"at positions {timeout_indices}"
+                        )
+                        break
+                if found is None:
+                    logger.warning(
+                        f"DHT mmap checksum error (all combos failed). "
+                        f"Timeout bits: {timeout_indices}. "
+                        f"Durations: {['%.0f' % d for d in durations_us]}"
+                    )
+                    return None, None
+                byte_data = found
+            else:
+                byte_data = _try_parse(base_data, sensor_type)
+                if byte_data is None:
+                    logger.warning(
+                        f"DHT mmap checksum error. "
+                        f"Durations: {['%.0f' % d for d in durations_us]}"
+                    )
+                    return None, None
 
             if sensor_type == 11:
                 temperature = float(byte_data[2])
