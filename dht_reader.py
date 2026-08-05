@@ -162,45 +162,47 @@ def _read_dht_mmap(physical_pin, sensor_type=11):
                     logger.warning("DHT mmap: timeout waiting for data start")
                     return None, None
 
-            # --- Read 40 bits: record HIGH pulse durations ---
-            durations = []
+            # --- Read 40 bits: count loop iterations for each HIGH pulse ---
+            # Using loop counts instead of time.perf_counter() avoids
+            # Python overhead distorting measurements
+            MAX_LOOPS = 10000
+            counts = []
             for bit_i in range(40):
                 # Wait for bit LOW → HIGH transition
-                t = time.perf_counter()
+                loop_count = 0
                 while _read_pin() == 0:
-                    if time.perf_counter() - t > TIMEOUT:
+                    loop_count += 1
+                    if loop_count > MAX_LOOPS:
                         logger.warning(f"DHT mmap: timeout at bit {bit_i} LOW")
                         return None, None
 
-                # Measure HIGH pulse duration
-                t_high = time.perf_counter()
+                # Count HIGH pulse width (proportional to bit value)
+                loop_count = 0
                 while _read_pin() == 1:
-                    if time.perf_counter() - t_high > TIMEOUT:
-                        # Last bit (bit 39): sensor releases line, stays HIGH
-                        # This is normal — use measured duration so far
-                        if bit_i == 39:
+                    loop_count += 1
+                    if loop_count > MAX_LOOPS:
+                        # Last 2 bits (38-39): sensor may release line, stays HIGH
+                        if bit_i >= 38:
                             break
                         logger.warning(f"DHT mmap: timeout at bit {bit_i} HIGH")
                         return None, None
-                durations.append(time.perf_counter() - t_high)
+                counts.append(loop_count)
 
-            # Dynamic threshold: find largest gap between sorted durations
-            # '0' bits cluster around ~26µs, '1' bits around ~70µs
-            # The largest gap between consecutive sorted values is the natural split
-            sorted_d = sorted(durations)
+            # Dynamic threshold: find largest gap between sorted loop counts
+            sorted_c = sorted(counts)
             max_gap = 0
             gap_idx = 0
-            for i in range(len(sorted_d) - 1):
-                gap = sorted_d[i + 1] - sorted_d[i]
+            for i in range(len(sorted_c) - 1):
+                gap = sorted_c[i + 1] - sorted_c[i]
                 if gap > max_gap:
                     max_gap = gap
                     gap_idx = i
-            threshold = (sorted_d[gap_idx] + sorted_d[gap_idx + 1]) / 2
-            data = [1 if d > threshold else 0 for d in durations]
+            threshold = (sorted_c[gap_idx] + sorted_c[gap_idx + 1]) / 2
+            data = [1 if c > threshold else 0 for c in counts]
             logger.info(
-                f"DHT pulse threshold={threshold*1e6:.0f}µs, "
-                f"min={sorted_d[0]*1e6:.0f}µs, max={sorted_d[-1]*1e6:.0f}µs, "
-                f"gap_at={sorted_d[gap_idx]*1e6:.0f}-{sorted_d[gap_idx+1]*1e6:.0f}µs"
+                f"DHT loop counts: min={sorted_c[0]}, max={sorted_c[-1]}, "
+                f"threshold={threshold:.0f}, "
+                f"gap_at={sorted_c[gap_idx]}-{sorted_c[gap_idx+1]}"
             )
 
             # --- Parse 5 bytes ---
