@@ -14,20 +14,20 @@
   "last_rate_update": "2026-06-21T19:16:57.046044",
   "bots": {
     "Cubie_A5E_San": {
-      "id": "id_cubie",
-      "username": "cubie_user"
+      "id": "",
+      "username": "Cubie_A5E_San"
     },
     "OrangePi_4_Pro": {
-      "id": "id_opi4pro",
-      "username": "opi4pro_user"
+      "id": "",
+      "username": "OrangePi_4_Pro"
     },
     "opizero3_llm": {
-      "id": "id_opizero3",
-      "username": "opizero3_user"
+      "id": "",
+      "username": "opizero3_llm"
     },
     "Yon_Rock_Pi_S": {
-      "id": "id_rockpis",
-      "username": "rockpis_user"
+      "id": "",
+      "username": "Yon_Rock_Pi_S"
     }
   },
   "users": {}
