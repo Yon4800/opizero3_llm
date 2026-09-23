@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, date
 import random
 import re
 import requests
+from typing import Optional, Dict, Any, List
 
 from mastodon_client import MastodonClient, ProcessedStore
 from state_manager import StateManager
@@ -76,7 +77,7 @@ def parse_talk_step(text: str):
             pass
     return 1
 
-def get_designated_bot_for_talk(status, note_text: str) -> Optional[str]:
+def get_designated_bot_for_talk(status, note_text: str):
     """
     +TALK投稿に対して応答・リアクションを担当するボット（唯一の1体）を決定する。
     他のボットは重複応答・重複リアクションを防ぐため即座に無視する。
@@ -244,7 +245,7 @@ def get_conversation_history_from_context(status_id: str, max_depth: int = 10) -
         ancestors = ctx.get("ancestors", [])[-max_depth:]
         for st in ancestors:
             text = MastodonClient.html_to_text(st.get("content", ""))
-            text = text.replace("+LLM", "").replace("+TEMP", "").replace("+temp", "").strip()
+            text = text.replace("+LLM", "").replace("+TEMP", "").replace("+temp", "").replace("+M", "").replace("+m", "").strip()
             text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", text).strip()
             if text:
                 is_bot = str(st["account"]["id"]) == MY_ID
@@ -397,7 +398,7 @@ async def on_status(status, is_notification: bool = False):
     is_sleep_cmd = bool(re.search(r"(寝て|おやすみ|休んで|寝ろ)", note_text)) and ("+" not in note_text or "+SLEEP" in note_text.upper())
     is_wake_cmd = bool(re.search(r"(起きて|おはよう|起きろ)", note_text))
     is_aff_cmd = "+好感度" in note_text or "+AFF" in note_text.upper()
-    is_temp_cmd = "+TEMP" in note_text.upper()
+    is_temp_cmd = "+TEMP" in note_text.upper() or "+M" in note_text.upper()
     is_llm_cmd = "+LLM" in note_text.upper()
 
     if not (is_sleep_cmd or is_wake_cmd or is_aff_cmd or is_temp_cmd or is_llm_cmd):
@@ -423,7 +424,10 @@ async def on_status(status, is_notification: bool = False):
         reply_status(f"わかったー！それじゃあ {duration_hours} 時間くらい寝るね。おやすみなさい…あはは…zzz")
         return
 
-    mc.react(status_id, emoji="🤔")
+    if is_temp_cmd:
+        mc.react(status_id, emoji="🌡️")
+    else:
+        mc.react(status_id, emoji="🤔")
 
     econ_data = None
     coin_info = ""
@@ -466,8 +470,13 @@ async def on_status(status, is_notification: bool = False):
         contents = [f"{user_name}の好感度 {affection} について教えてください。"]
     else:
         history_msgs = get_conversation_history_from_context(status_id)
-        user_input = note_text.replace("+LLM", "").replace("+TEMP", "").replace("+temp", "").strip()
+        user_input = note_text.replace("+LLM", "").replace("+TEMP", "").replace("+temp", "").replace("+M", "").replace("+m", "").strip()
         user_input = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", user_input).strip()
+        if not user_input:
+            if is_temp_cmd:
+                user_input = "現在の気温や湿度などのセンサー測定状態を教えて！"
+            else:
+                user_input = "こんにちは！お話ししましょう！"
         
         affection = state_manager.get_affection(user_id, user_name)
         system_message = (
@@ -503,7 +512,6 @@ async def on_status(status, is_notification: bool = False):
         match_rate = re.search(r"\[RATE_CHANGE:\s*([+-]?\d+(?:\.\d+)?)\]", reply_text)
         if match_rate:
             try:
-                from shared_economy_helper import apply_rate_change, save_economy
                 rate_delta = float(match_rate.group(1))
                 apply_rate_change(econ_data, "OGC", rate_delta)
                 save_economy(econ_data)
