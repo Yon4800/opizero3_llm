@@ -535,9 +535,19 @@ async def polling_runner():
     Mastodon / Hollo REST API による定期ポーリングループ
     """
     print(f"[{BOT_NAME}] Starting Mastodon/Hollo polling runner...")
+    poll_count = 0
+    # 起動時初回自動フォロバ
+    try:
+        followed = mc.auto_follow_back()
+        if followed > 0:
+            print(f"[{BOT_NAME}] Initial auto-followback: followed {followed} users.")
+    except Exception as ex:
+        print(f"[{BOT_NAME}] Error during initial auto-followback: {ex}")
+
     while True:
         try:
-            # 1. 通知（メンションなど）のチェック
+            poll_count += 1
+            # 1. 通知（メンション・フォローなど）のチェック
             notifications = mc.get_notifications(limit=15)
             for notif in reversed(notifications):
                 notif_type = notif.get("type")
@@ -545,15 +555,13 @@ async def polling_runner():
                     status = notif.get("status")
                     if status:
                         await on_status(status)
-                elif notif_type == "follow":
-                    # 自動フォローバック
+                elif notif_type in ["follow", "follow_request"]:
                     account = notif.get("account", {})
-                    acc_id = account.get("id")
+                    acc_id = str(account.get("id"))
                     if acc_id:
-                        try:
-                            mc.session.post(f"{mc.base_url}/api/v1/accounts/{acc_id}/follow", timeout=5)
-                        except Exception:
-                            pass
+                        if notif_type == "follow_request":
+                            mc.authorize_follow_request(acc_id)
+                        mc.follow_account(acc_id)
 
             # 2. ホームタイムライン（+TALK 朝礼などの検知）のチェック
             home_statuses = mc.get_home_timeline(limit=15)
@@ -561,6 +569,12 @@ async def polling_runner():
                 txt = MastodonClient.html_to_text(st.get("content", ""))
                 if "+TALK" in txt.upper():
                     await on_status(st)
+
+            # 3. 定期フォロバチェック（約60秒ごと）
+            if poll_count % 20 == 0:
+                followed = mc.auto_follow_back()
+                if followed > 0:
+                    print(f"[{BOT_NAME}] Periodic auto-followback: followed {followed} users.")
 
         except Exception as e:
             print(f"[{BOT_NAME}] Polling error: {e}")
