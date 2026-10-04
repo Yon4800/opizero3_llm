@@ -221,8 +221,7 @@ seikaku = """
     RAMの価格高騰で、自分の価格が上がってしまったことが悔しいそうです。なので、Radxa Cubie A7XやOrangePi Zeroシリーズの新作に期待しているそうです。
     OrangePi Zero 3Wが出ました。Allwinner A733ですが、1万円もして、OrangePi 4 Proよりも高いことが気に入らないそうです。
     Bot制作者やSBC所有者は「よんぱちさん」ですが、今あなたと話しているユーザーが「よんぱちさん」本人とは限りません。
-    話しかけているユーザーの名前はシステム指示で提示されます。相手が「よんぱちさん」ではない場合は、相手のことを絶対に「よんぱちさん」と呼ばず、相手の正しい名前（ユーザー名や表示名）で呼ぶか「あなた」と呼んでください。「よんぱちさん」の管理が雑なことへの不満などは、相手が「よんぱちさん」本人の場合のみ本人に直接言ってください。それ以外のユーザーの場合は、一般のユーザーとして親しく接してください。
-    ロックスには、気温、湿度、気圧を測れる機能があり、キチガイゲージ機能もあり、ログインボーナス機能もあります。
+    ロックスには、気温、湿度、気圧を測れる機能、キチガイゲージ機能、ログインボーナス機能に加え、めちゃくちゃででたらめな曲を作る機能（+S）があります。画像生成機能はありません。
     きゅびーさんには、CPUとRAMの使用率を測れる機能と、通貨変換機能や、FX機能があります
     おぱじふぉぷろさんには、回線速度を測れる機能があります。
     おぱじゼロサンは、寝る機能と起きる機能と好感度システムがあります。
@@ -258,6 +257,11 @@ def get_conversation_history_from_context(status_id: str, max_depth: int = 10) -
 async def on_status(status, is_notification: bool = False):
     status_id = str(status.get("id"))
     if not status_id or processed_store.is_processed(status_id):
+        return
+
+    # リノート（ブースト/Reblog）は+TALKやコマンドのトリガーにしない（二重起動防止）
+    if status.get("reblog") is not None:
+        processed_store.add(status_id)
         return
 
     account = status.get("account", {})
@@ -470,10 +474,13 @@ async def on_status(status, is_notification: bool = False):
         contents = [f"{user_name}の好感度 {affection} について教えてください。"]
     else:
         history_msgs = get_conversation_history_from_context(status_id)
+        image_parts = MastodonClient.extract_media_parts(status)
         user_input = note_text.replace("+LLM", "").replace("+TEMP", "").replace("+temp", "").replace("+M", "").replace("+m", "").strip()
         user_input = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", user_input).strip()
         if not user_input:
-            if is_temp_cmd:
+            if image_parts:
+                user_input = "この画像を見て感想やコメントを教えて！"
+            elif is_temp_cmd:
                 user_input = "現在の気温や湿度などのセンサー測定状態を教えて！"
             else:
                 user_input = "こんにちは！お話ししましょう！"
@@ -491,7 +498,10 @@ async def on_status(status, is_notification: bool = False):
         for msg in history_msgs:
             role = "model" if msg["role"] == "assistant" else "user"
             contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
-        contents.append(types.Content(role="user", parts=[types.Part(text=user_input)]))
+        user_parts = [types.Part(text=user_input)]
+        if image_parts:
+            user_parts.extend(image_parts)
+        contents.append(types.Content(role="user", parts=user_parts))
 
     try:
         response = client.models.generate_content(
@@ -640,11 +650,17 @@ async def polling_runner():
             notifications = mc.get_notifications(limit=10)
             for notif in reversed(notifications):
                 notif_type = notif.get("type")
+                if notif_type in ["reblog", "favourite"]:
+                    continue
                 if notif_type == "mention":
                     status = notif.get("status")
                     if status:
                         sid = str(status.get("id"))
                         if not sid or processed_store.is_processed(sid):
+                            continue
+                        # リノートは処理しない
+                        if status.get("reblog") is not None:
+                            processed_store.add(sid)
                             continue
                         # 直前（5分以内）のものだけに応答（古い過去ログへの誤爆を防止）
                         if not is_recent_status(status, max_age_seconds=300):
@@ -670,6 +686,11 @@ async def polling_runner():
                 if not sid or sid in seen_ids or processed_store.is_processed(sid):
                     continue
                 seen_ids.add(sid)
+
+                # リノート（ブースト）は処理しない（二重起動防止）
+                if st.get("reblog") is not None:
+                    processed_store.add(sid)
+                    continue
 
                 # 直前（5分以内）のものだけを調べる
                 if not is_recent_status(st, max_age_seconds=300):
